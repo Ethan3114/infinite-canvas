@@ -2,10 +2,10 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-  <img src="assets/logo.png" alt="AI 产品开箱工具包" width="180">
+  <img src="assets/logo.png" alt="AI 产品开发工具包" width="180">
 </picture>
 
-# AI 产品从想法到上线 · 开箱工具包
+# AI 产品从想法到上线 · 开发工具包
 
 **不懂代码，也能做出并上线一个 AI 产品**
 
