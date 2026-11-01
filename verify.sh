@@ -140,7 +140,7 @@ cd "$ROOT"
 for e in * .[!.]*; do
   [ -e "$e" ] || continue
   case "$e" in
-    AGENTS.md|CLAUDE.md|README.md|开始看这里.md|三门课总导读.md|LICENSE|verify.sh|.gitignore|assets|docs|projects|.git|.DS_Store) ;;
+    AGENTS.md|CLAUDE.md|README.md|开始看这里.md|LICENSE|verify.sh|.gitignore|assets|docs|projects|.git|.DS_Store) ;;
     scripts) for f in scripts/*; do [ "$f" = scripts/export-clean-kit.sh ] || { log "放错位置：${f}（应在产品文件夹里）"; STRAY=$((STRAY+1)); }; done ;;
     .venv|.env|.env.*|.next|.vefaas|.pytest_cache) log "放错位置：${e}（应在产品文件夹里）"; STRAY=$((STRAY+1)) ;;
     .*) ;;  # 其他隐藏文件夹多为编码工具自己的配置
