@@ -95,7 +95,8 @@ log "结果：$R6"
 # ---------- 3. 密钥排除 ----------
 sect "3. 密钥排除（扫描整个仓库会进 git 的文件，以及本产品的构建产物）"
 cd "$ROOT"
-PAT='sk-[A-Za-z0-9]{20,}|AKLT[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|password|token)[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_-]{20,}'
+# 样式：OpenAI/DeepSeek 等 sk-…、火山引擎 AKLT…、腾讯云 SecretId AKID…、AWS AKIA…、以及"名字像密钥 = 长值"
+PAT='sk-[A-Za-z0-9]{20,}|AKLT[A-Za-z0-9]{10,}|AKID[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|password|token)[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_-]{20,}'
 HITS=0
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "问题：工具包文件夹不是 Git 仓库，无法判断哪些文件会进仓库。请先让 AI 执行 git init 并配置 .gitignore。"
@@ -116,7 +117,9 @@ for d in "$P/frontend/.next" "$P/frontend/dist" "$P/frontend/out" "$P/backend/di
   if [ -n "$M" ]; then log "问题：构建产物 $d 中发现疑似密钥，文件："; log "$M"; HITS=$((HITS+1)); else log "通过：构建产物 $d 未发现密钥样式字符串。"; fi
 done
 # 2d. 本机 .env 里的真实 Key 值不得出现在任何跟踪文件或构建产物里（值本身不打印）
-for envf in "$P/backend/.env" "$P/backend/.env.secrets" "$P/.env" "$P/frontend/.env.local" .env; do
+#     范围：产品文件夹下所有 .env* 文件（.env.example 除外，依赖目录除外）+ 根目录 .env。产品名不含空格（AGENTS.md 第 9 节），按空白切分即可。
+ENVFILES="$(find "$P" -maxdepth 3 -name '.env*' ! -name '.env.example' -not -path '*/node_modules/*' -not -path '*/.venv/*' -not -path '*/.next/*' 2>/dev/null)"
+for envf in $ENVFILES .env; do
   [ -f "$envf" ] || continue
   while IFS= read -r line; do
     case "$line" in \#*|"") continue;; esac
