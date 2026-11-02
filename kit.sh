@@ -35,7 +35,7 @@ else
   say "有多个产品，这次做哪个？"; i=1
   for p in "${PRODUCTS[@]}"; do
     st="还没开始"; [ -f "projects/$p/docs/流程状态.txt" ] && st="$(grep -m1 '^阶段=' "projects/$p/docs/流程状态.txt" | cut -d= -f2-)"
-    say "  $i) $p（$st）"; i=$((i+1))
+    say "  $i) ${p}（${st}）"; i=$((i+1))
   done
   while :; do ask "输入编号："; if [[ "$ANS" =~ ^[0-9]+$ ]] && [ "$ANS" -ge 1 ] && [ "$ANS" -le "${#PRODUCTS[@]}" ]; then PRODUCT="${PRODUCTS[$((ANS-1))]}"; break; fi; done
 fi
@@ -162,13 +162,13 @@ write_task() { # $1 阶段
   {
     say "# 本阶段任务（流程管家自动生成，每次开工覆盖；AI 不要改这个文件）"
     say
-    say "- 产品：$PRODUCT（文件夹 projects/$PRODUCT/）"
-    say "- 阶段：$st（本阶段第 $n 次开工）"
+    say "- 产品：${PRODUCT}（文件夹 projects/$PRODUCT/）"
+    say "- 阶段：${st}（本阶段第 $n 次开工）"
     say "- 生成时间：$(date '+%Y-%m-%d %H:%M')"
     say
     say "## 先做"
     say "1. 读工具包根目录的 AGENTS.md，按第 0 节启动流程处理这个产品（有 docs/项目状态.md 就是老项目，从它记录的地方接着做）。"
-    say "2. 本阶段只读这些手册内容：$READ。读完按 AGENTS.md 第 7 节做一次对账（列出与十条底线冲突的句子，没有就说\"已对账，无冲突\"）。"
+    say "2. 本阶段只读这些手册内容：${READ}。读完按 AGENTS.md 第 7 节做一次对账（列出与十条底线冲突的句子，没有就说\"已对账，无冲突\"）。"
     say
     say "## 本阶段要交的"
     say "$OUT"
@@ -188,7 +188,7 @@ write_task() { # $1 阶段
     fi
     say
     say "## 规矩"
-    say "- 只做 $st，不做下一阶段的事。$( [ "$NOCODE" -eq 1 ] && say "这是无代码阶段，不要写代码、不要建 backend/ frontend/。" )"
+    say "- 只做 ${st}，不做下一阶段的事。$( [ "$NOCODE" -eq 1 ] && say "这是无代码阶段，不要写代码、不要建 backend/ frontend/。" )"
     say "- 需要产品经理决定的事，用决策卡当面问他（一次不超过 5 个），记入 docs/项目状态.md。"
     say "- 做完后在工具包根目录运行 \`./verify.sh $PRODUCT $st\`，把六项结果抄进是否表。"
     say "- 不要修改 docs/本阶段任务.md、docs/流程状态.txt、docs/流程历史.txt，它们归流程管家。"
@@ -221,7 +221,7 @@ next_stage() { # $1 当前 → 设置 NEXT（"完成" 表示结束）
 show_status() {
   local st status
   st="$(sget 阶段)"; status="$(sget 状态)"; stage_info "$st"
-  line; say "产品：$PRODUCT"; say "阶段：$st　　状态：$status"
+  line; say "产品：$PRODUCT"; say "阶段：${st}　　状态：$status"
   [ -n "$(sget 工具)" ] && say "编码工具：$(tool_name "$(sget 工具)")"
   say "本阶段要交：$OUT"
   say "本阶段你要做：$PM"
@@ -249,12 +249,12 @@ if [ "$STATUS" = "等验收" ]; then
     next_stage "$STAGE"; hist "$STAGE 验收通过 → $NEXT"
     sset 阶段 "$NEXT"; sset 状态 待开工; sset 开工次数 0
     if [ "$NEXT" = "完成" ]; then say "全部完成！"; exit 0; fi
-    say "已翻到 $NEXT。"
+    say "已翻到 ${NEXT}。"
     if ! ask_yn "现在就开始做 $NEXT 吗？"; then say "好，下次双击开工继续。"; exit 0; fi
     STAGE="$NEXT"; STATUS=待开工; show_status
   else
     sset 状态 做中; hist "$STAGE 验收未通过，继续改"
-    say "好，留在 $STAGE。把没通过的地方告诉 AI 去改。"
+    say "好，留在 ${STAGE}。把没通过的地方告诉 AI 去改。"
     if ! ask_yn "现在打开工具继续改吗？"; then exit 0; fi
   fi
 fi
@@ -264,7 +264,7 @@ TOOL="$(sget 工具)"
 if [ -z "$TOOL" ]; then choose_tool; sset 工具 "$TOOL"; fi
 # 写任务、开工
 write_task "$STAGE"; sset 状态 做中; hist "$STAGE 开工（第 $(sget 开工次数) 次，工具 $(tool_name "$TOOL")）"
-PROMPT="请读取 projects/$PRODUCT/docs/本阶段任务.md，按其中要求做 $STAGE。"
+PROMPT="请读取 projects/$PRODUCT/docs/本阶段任务.md，按其中要求做 ${STAGE}。"
 launch_tool "$TOOL" "$PROMPT"
 
 # 自检
@@ -278,7 +278,7 @@ if [ "$RC" -eq 0 ]; then
   if ask_yn "验收通过了吗？（还没看就先选 n，下次双击开工再回答）"; then
     next_stage "$STAGE"; hist "$STAGE 验收通过 → $NEXT"
     sset 阶段 "$NEXT"; sset 状态 待开工; sset 开工次数 0
-    if [ "$NEXT" = "完成" ]; then say "全部完成！"; else say "已翻到 $NEXT。下次双击开工就从它开始。"; fi
+    if [ "$NEXT" = "完成" ]; then say "全部完成！"; else say "已翻到 ${NEXT}。下次双击开工就从它开始。"; fi
   else
     say "好，留在 $STAGE 等验收。验收完再双击开工回答。"
   fi
