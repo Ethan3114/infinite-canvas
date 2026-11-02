@@ -46,7 +46,9 @@ elif [ -d backend/tests ]; then
   PASSED="$(grep -Eo '[0-9]+ passed' "$T" | tail -1 | grep -Eo '[0-9]+')"; PASSED="${PASSED:-0}"
   FAILED="$(grep -Eo '[0-9]+ (failed|error)' "$T" | grep -Eo '[0-9]+' | paste -sd+ - | bc 2>/dev/null)"; FAILED="${FAILED:-0}"
   TOTAL=$((PASSED + FAILED))
-  if [ "$RC" -eq 0 ] && [ "$PASSED" -gt 0 ]; then R1="通过（${PASSED}/${TOTAL}）"; else R1="不通过（通过 ${PASSED}/${TOTAL}，退出码 ${RC}）"; fi
+  if [ "$RC" -eq 0 ] && [ "$PASSED" -ge 5 ]; then R1="通过（${PASSED}/${TOTAL}）"
+  elif [ "$RC" -eq 0 ]; then R1="不通过（只有 ${PASSED} 条测试通过，至少要 5 条，防止空测试充数）"
+  else R1="不通过（通过 ${PASSED}/${TOTAL}，退出码 ${RC}）"; fi
   D1="后端 pytest"
   rm -f "$T"
 else
@@ -139,15 +141,45 @@ log "结果：$R2"
 cd "$P"
 
 # ---------- 4. 重启恢复 ----------
-sect "4. 数据重启恢复（调用 scripts/restart-check.sh）"
+sect "4. 数据重启恢复（verify.sh 自己起服务、写随机标记、杀进程、再起、读回；钩子 scripts/restart-check.sh 只提供 start/write/read/stop）"
 if [ "$NOCODE" -eq 1 ]; then
   R3="N/A（无代码阶段）"
-elif [ -x scripts/restart-check.sh ]; then
-  T="$(mktemp)"; bash scripts/restart-check.sh > "$T" 2>&1; RC=$?
-  tee -a "$LOG" < "$T"; rm -f "$T"
-  if [ "$RC" -eq 0 ]; then R3="通过"; else R3="不通过（退出码 ${RC}，见输出）"; fi
+elif [ -f scripts/restart-check.sh ]; then
+  export RESTART_CHECK_DIR="$(mktemp -d)"
+  NONCE="rc-$(date +%s)-${RANDOM}${RANDOM}"
+  FAIL=""; PID1=""; PID2=""; RID=""
+  hook() { bash scripts/restart-check.sh "$@" 2>>"$LOG" | tail -1 | tr -d '[:space:]'; }   # 取标准输出最后一行
+  alive() { local st; st="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"; [ -n "$st" ] && [ "${st:0:1}" != "Z" ]; }   # 僵尸不算活着
+  PID1="$(hook start)"
+  if ! [[ "$PID1" =~ ^[0-9]+$ ]] || ! alive "$PID1"; then FAIL="第 1 步 start 没有返回一个正在运行的进程号（得到：${PID1:-空}）"; fi
+  if [ -z "$FAIL" ]; then
+    RID="$(hook write "$NONCE")"
+    [ -n "$RID" ] || FAIL="第 2 步 write 没有返回记录 ID"
+  fi
+  if [ -z "$FAIL" ]; then
+    kill -9 "$PID1" 2>/dev/null; sleep 1
+    alive "$PID1" && FAIL="第 3 步 进程 ${PID1} 杀不掉"
+  fi
+  if [ -z "$FAIL" ]; then
+    PID2="$(hook start)"
+    if ! [[ "$PID2" =~ ^[0-9]+$ ]] || ! alive "$PID2"; then FAIL="第 4 步 重启后 start 没有返回一个正在运行的进程号（得到：${PID2:-空}）"
+    elif [ "$PID2" = "$PID1" ]; then FAIL="第 4 步 重启后进程号没变（${PID1}），没有真的重启"; fi
+  fi
+  if [ -z "$FAIL" ]; then
+    GOT="$(hook read "$RID")"
+    [ "$GOT" = "$NONCE" ] || FAIL="第 5 步 重启后读回的标记和 verify.sh 生成的随机标记不一致（得到：${GOT:-空}）"
+  fi
+  [ -n "$PID2" ] && kill "$PID2" 2>/dev/null
+  bash scripts/restart-check.sh stop >/dev/null 2>&1 || true
+  rm -rf "$RESTART_CHECK_DIR"; unset RESTART_CHECK_DIR
+  if [ -z "$FAIL" ]; then
+    log "通过：起服务（PID ${PID1}）→ 写入随机标记 → 杀掉 → 再起（PID ${PID2}）→ 按 ID ${RID} 读回，标记一致。"
+    R3="通过（进程 ${PID1}→${PID2}，随机标记读回一致）"
+  else
+    log "不通过：${FAIL}。钩子契约见通用手册第十节。"; R3="不通过（${FAIL}）"
+  fi
 else
-  log "未找到 scripts/restart-check.sh。有可重启的服务时，AI 必须按项目写这个钩子。"
+  log "未找到 scripts/restart-check.sh。有可重启的服务时，AI 必须按通用手册第十节的契约写这个钩子（start / write / read / stop）。"
 fi
 log "结果：$R3"
 
