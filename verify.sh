@@ -73,7 +73,7 @@ else
   SMK="docs/evidence/$STAGE/冒烟记录.md"
   TS='^\| *20[0-9]{2}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}'
   if [ ! -s "$SMK" ]; then
-    log "缺：$SMK。真实冒烟还没跑，或冒烟脚本没有写记录。无 Key 时如实填\"待验\"，不要手造记录。"
+    log "缺：${SMK}。真实冒烟还没跑，或冒烟脚本没有写记录。无 Key 时如实填\"待验\"，不要手造记录。"
     R6="待验（缺冒烟记录）"
   else
     MODEL="$(grep -m1 -E '^- *模型(：|:)' "$SMK" | sed -E 's/^- *模型(：|:) *//')"
@@ -87,7 +87,7 @@ else
       log "问题：以下代码文件比冒烟记录新，说明冒烟之后又改了代码，要重跑冒烟："; log "$NEWER"
       R6="待验（记录早于最近代码改动）"
     else
-      log "有：$SMK，模型 ${MODEL}，${CALLS} 次真实调用，最近一次 ${LAST}"
+      log "有：${SMK}，模型 ${MODEL}，${CALLS} 次真实调用，最近一次 ${LAST}"
       R6="有记录（${MODEL}，${CALLS} 次，最近 ${LAST}）"
     fi
   fi
@@ -264,7 +264,7 @@ PMISS=0
 for st in ${PRIOR[@]+"${PRIOR[@]}"}; do
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if [ ! -s "$f" ]; then log "缺：$f（前面的阶段 ${st} 没做完就到了 ${STAGE}）"; PMISS=$((PMISS+1)); fi
+    if [ ! -s "$f" ]; then log "缺：${f}（前面的阶段 ${st} 没做完就到了 ${STAGE}）"; PMISS=$((PMISS+1)); fi
   done < <(stage_files "$st")
 done
 [ "${#PRIOR[@]}" -gt 0 ] && [ "$PMISS" -eq 0 ] && log "通过：前面阶段（${PRIOR[*]}）的产物都在。"
