@@ -199,7 +199,7 @@ fi
 log "结果：$R4"
 
 # ---------- 6. 文件齐全与位置 ----------
-sect "6. 文件齐全与位置（AGENTS.md 第 7 节的产出清单；根目录不放产品文件）"
+sect "6. 文件齐全与位置（AGENTS.md 第 7 节的产出清单；根目录不放产品文件；前面阶段有没有被跳过）"
 MISS=0; STRAY=0
 cd "$ROOT"
 # 5a. 根目录只放工具包自己的文件，产品的代码、依赖、数据都应在 projects/<产品名>/ 里
@@ -242,7 +242,36 @@ if [ -n "$STAGE" ]; then
     if [ "$SHOTS" -gt 0 ]; then log "有：docs/evidence/$STAGE/ 下 $SHOTS 张截图"; else log "缺：docs/evidence/$STAGE/ 下至少一张截图（.png / .jpg）"; MISS=$((MISS+1)); fi
   fi
 fi
-if [ "$MISS" -gt 0 ] || [ "$STRAY" -gt 0 ]; then R5="不通过（缺 ${MISS} 个文件，${STRAY} 处放错位置）"
+# 5c. 前面阶段的产物：AI 跳过了前面的阶段，在这里报出来（阶段 4 可选，阶段 5 不要求它）
+stage_files() {  # 参数：阶段名 → 该阶段必须有的文件，每行一个
+  case "$1" in
+    阶段0) echo docs/阶段文档/阶段0-PRD补全清单.md; echo docs/evidence/阶段0/是否表.md ;;
+    阶段1) echo docs/阶段文档/技术适配声明.md; echo docs/evidence/阶段1/是否表.md ;;
+    阶段3-0) echo docs/阶段文档/前端适配声明.md; echo docs/evidence/阶段3-0/是否表.md ;;
+    阶段2-*|阶段3-*) echo "docs/阶段文档/$1技术开发文档.md"; echo "docs/evidence/$1/是否表.md" ;;
+    阶段4) echo docs/阶段文档/上线方案摘要.md; echo docs/evidence/阶段4/是否表.md ;;
+  esac
+}
+PRIOR=(); N=""
+case "$STAGE" in
+  阶段1) PRIOR=(阶段0) ;;
+  阶段2-*) N="${STAGE#阶段2-}"; PRIOR=(阶段0 阶段1); i=1; while [[ "$N" =~ ^[0-9]+$ ]] && [ "$i" -lt "$N" ]; do PRIOR+=("阶段2-$i"); i=$((i+1)); done ;;
+  阶段3-0) PRIOR=(阶段0 阶段1 阶段2-1) ;;
+  阶段3-*) N="${STAGE#阶段3-}"; PRIOR=(阶段0 阶段1 阶段2-1 阶段3-0); i=1; while [[ "$N" =~ ^[0-9]+$ ]] && [ "$i" -lt "$N" ]; do PRIOR+=("阶段3-$i"); i=$((i+1)); done ;;
+  阶段4|阶段5) PRIOR=(阶段0 阶段1 阶段2-1 阶段3-0 阶段3-1) ;;
+esac
+PMISS=0
+for st in ${PRIOR[@]+"${PRIOR[@]}"}; do
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ ! -s "$f" ]; then log "缺：$f（前面的阶段 ${st} 没做完就到了 ${STAGE}）"; PMISS=$((PMISS+1)); fi
+  done < <(stage_files "$st")
+done
+[ "${#PRIOR[@]}" -gt 0 ] && [ "$PMISS" -eq 0 ] && log "通过：前面阶段（${PRIOR[*]}）的产物都在。"
+MISS=$((MISS+PMISS))
+if [ "$MISS" -gt 0 ] || [ "$STRAY" -gt 0 ]; then
+  R5="不通过（缺 ${MISS} 个文件，${STRAY} 处放错位置）"
+  [ "$PMISS" -gt 0 ] && R5="不通过（缺 ${MISS} 个文件，其中 ${PMISS} 个属于前面没做完的阶段；${STRAY} 处放错位置）"
 elif [ -z "$STAGE" ]; then R5="通过（只查了文件位置；给阶段名才查文件齐全）"
 else R5="通过"; fi
 log "结果：$R5"
