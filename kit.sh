@@ -1,36 +1,40 @@
 #!/usr/bin/env bash
-# 流程管家：站在产品经理和编码工具中间的看门人。
-#   - 记住现在做哪个产品、第几阶段；
-#   - 把本阶段任务写成 docs/本阶段任务.md，打开产品经理装的编码工具并贴好开场白；
-#   - 工具关掉后自动跑 verify.sh；自检没过就不让进下一阶段；
-#   - 自检过了，问产品经理"验收通过了吗"，y 才翻到下一阶段。
-# 不碰模型、不花钱、不存密钥。规则本身仍在 AGENTS.md 和手册里，管家只保证"该交的交了、该停的停了"。
+# 流程管家：看门人。记住做哪个产品、第几阶段；给出本阶段任务；自检没过不让翻页。
+# 不碰模型、不花钱、不存密钥。规则仍在 AGENTS.md 和手册里，管家只保证"该交的交了、该停的停了"。
 #
-# 用法（产品经理一般只双击 开工.command，不用记这些）：
-#   bash kit.sh                 正常走流程
-#   bash kit.sh 状态            只看现在到哪了
-#   bash kit.sh 换工具          下次开工重新选编码工具
-#   bash kit.sh 回到 阶段2-1    管家记的阶段和实际不符时手动校正
+# 主路线（AI 在对话里调用，产品经理只管聊天）：
+#   bash kit.sh 任务 [产品名]              给出本阶段任务（写到 docs/本阶段任务.md 并打印）
+#   bash kit.sh 自检 [产品名]              跑 verify.sh，结果记入状态；退出码 0 = 过
+#   bash kit.sh 通过 [产品名] [下一阶段]    产品经理在对话里说"验收通过"后才能调；自检没过会被拒绝
+#   bash kit.sh 状态 [产品名]              现在到哪了
+#   bash kit.sh 回到 [产品名] 阶段X         管家记的阶段和实际不符时手动校正
+# 副路线（产品经理双击 开工.command）：
+#   bash kit.sh                            一个窗口带着走：打开编码工具、关掉后自检、问验收
+#   bash kit.sh 换工具 [产品名]             下次双击重新选编码工具
+# 只有一个产品时产品名可省略。
 set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 say()  { printf '%s\n' "$*"; }
 line() { say "────────────────────────────────────────────────────────"; }
-ask()  { # ask "问题" → 回答存在 ANS
+ask()  { # 交互模式用。ask "问题" → ANS
   printf '%s ' "$1"
   if ! IFS= read -r ANS; then say; say "没有收到输入，先到这里。下次双击开工继续。"; exit 1; fi
   ANS="$(printf '%s' "$ANS" | tr -d '[:space:]')"
 }
-ask_yn() { # ask_yn "问题" → 返回 0=y 1=n
-  while :; do ask "$1 [y/n]"; case "$ANS" in y|Y|是) return 0;; n|N|否) return 1;; esac; say "请输入 y 或 n。"; done
-}
+ask_yn() { while :; do ask "$1 [y/n]"; case "$ANS" in y|Y|是) return 0;; n|N|否) return 1;; esac; say "请输入 y 或 n。"; done; }
 
-# ---------- 选产品 ----------
+# ---------- 参数：子命令 [产品名] [其他] ----------
+CMD="${1:-}"; shift || true
 PRODUCTS=()
 for d in projects/*/; do [ -d "$d" ] && PRODUCTS+=("$(basename "$d")"); done
 if [ "${#PRODUCTS[@]}" -eq 0 ]; then say "projects/ 下没有产品文件夹。先按 README 放好 PRD，或让 AI 新建产品。"; exit 2; fi
-if [ "${#PRODUCTS[@]}" -eq 1 ]; then PRODUCT="${PRODUCTS[0]}"
+PRODUCT=""
+if [ $# -ge 1 ] && [ -d "projects/$1" ]; then PRODUCT="$1"; shift
+elif [ "${#PRODUCTS[@]}" -eq 1 ]; then PRODUCT="${PRODUCTS[0]}"
+elif [ -n "$CMD" ]; then
+  say "有多个产品，请指明：bash kit.sh ${CMD} <产品名> ...   现有：${PRODUCTS[*]}"; exit 2
 else
   say "有多个产品，这次做哪个？"; i=1
   for p in "${PRODUCTS[@]}"; do
@@ -49,18 +53,19 @@ mkdir -p "$P/docs"
 sget() { [ -f "$STATE" ] && grep -m1 "^$1=" "$STATE" | cut -d= -f2- || true; }
 sset() { local t; t="$(mktemp)"; { [ -f "$STATE" ] && grep -v "^$1=" "$STATE"; printf '%s=%s\n' "$1" "$2"; } > "$t" 2>/dev/null; mv "$t" "$STATE"; }
 hist() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M')" "$*" >> "$HIST"; }
+valid_stage() { [[ "$1" =~ ^(阶段0|阶段1|阶段2-[1-9][0-9]*|阶段3-[0-9]+|阶段4|阶段5|完成)$ ]]; }
 
-STAGES_ALL="阶段0 阶段1 阶段2-1 阶段3-0 阶段3-1 阶段4 阶段5"
 if [ ! -f "$STATE" ]; then
-  if [ -f "$P/docs/项目状态.md" ]; then
+  if [ -f "$P/docs/项目状态.md" ] && [ -z "$CMD" ]; then
     say "这个产品以前做过，但管家还没记录过它。现在做到第几阶段？"
     say "  可填：阶段0、阶段1、阶段2-1、阶段2-2…、阶段3-0、阶段3-1…、阶段4、阶段5（直接回车 = 阶段0）"
-    ask "阶段："; [ -z "$ANS" ] && ANS="阶段0"
+    ask "阶段："; [ -z "$ANS" ] && ANS="阶段0"; valid_stage "$ANS" || ANS="阶段0"
     sset 阶段 "$ANS"
   else
     sset 阶段 阶段0
   fi
   sset 状态 待开工; hist "管家开始记录，起点 $(sget 阶段)"
+  [ -f "$P/docs/项目状态.md" ] && [ -n "$CMD" ] && say "提示：这个产品以前做过但管家刚开始记录，起点按 阶段0。实际不是的话用：bash kit.sh 回到 ${PRODUCT} 阶段X"
 fi
 
 # ---------- 阶段信息（来自 AGENTS.md 第 7 节加载表） ----------
@@ -99,8 +104,97 @@ stage_info() { # 设置 READ OUT PM PASS NOCODE
   esac
 }
 
-# ---------- 编码工具 ----------
-# 启动方式：auto = 带开场白直接打开；semi = 打开工具，开场白已复制到剪贴板，产品经理粘贴一次；manual = 不打开，产品经理自己开工具再粘贴
+# 下一阶段的候选：唯一时 NEXT_FIXED 有值；有分岔时 NEXT_OPTS 列出可选项
+next_options() {
+  local cur="$1" n; NEXT_FIXED=""; NEXT_OPTS=""
+  case "$cur" in
+    阶段0) NEXT_FIXED=阶段1 ;;
+    阶段1) NEXT_FIXED=阶段2-1 ;;
+    阶段2-*) n="${cur#阶段2-}"; NEXT_OPTS="阶段2-$((n+1)) 阶段3-0" ;;
+    阶段3-0) NEXT_FIXED=阶段3-1 ;;
+    阶段3-*) n="${cur#阶段3-}"; NEXT_OPTS="阶段3-$((n+1)) 阶段4 阶段5" ;;
+    阶段4) NEXT_FIXED=阶段5 ;;
+    阶段5) NEXT_FIXED=完成 ;;
+    *) NEXT_FIXED=完成 ;;
+  esac
+}
+explain_options() { # 用产品语言解释分岔
+  case "$1" in
+    阶段2-*) say "  阶段2-$(( ${1#阶段2-} + 1 ))：阶段 2 还有下一个子阶段（看《技术适配声明》第 7 节子阶段规划）"; say "  阶段3-0：阶段 2 做完了，进入正式前端" ;;
+    阶段3-*) say "  阶段3-$(( ${1#阶段3-} + 1 ))：阶段 3 还有下一个子阶段"; say "  阶段4：上线（要注册腾讯云）"; say "  阶段5：这次做到合格为止，直接收尾" ;;
+  esac
+}
+
+# ---------- 本阶段任务文件 ----------
+write_task() { # $1 阶段 $2 模式 chat|window
+  local st="$1" mode="$2" n lastfail=""
+  stage_info "$st"
+  n="$(sget 开工次数)"; n=$(( ${n:-0} + 1 )); sset 开工次数 "$n"
+  if [ "$(sget 状态)" = "自检没过" ] && [ -f "$P/docs/evidence/$st/verify-输出.txt" ]; then
+    lastfail="$( { grep -E '^(缺：|问题：|放错位置：)' "$P/docs/evidence/$st/verify-输出.txt"; sed -n '/汇总/,$p' "$P/docs/evidence/$st/verify-输出.txt" | grep -E '不通过|未配置|待验'; } | sort -u || true)"
+  fi
+  {
+    say "# 本阶段任务（流程管家自动生成，每次开工覆盖；AI 不要改这个文件）"
+    say
+    say "- 产品：${PRODUCT}（文件夹 projects/${PRODUCT}/）"
+    say "- 阶段：${st}（本阶段第 ${n} 次开工）"
+    say "- 生成时间：$(date '+%Y-%m-%d %H:%M')"
+    say
+    say "## 先做"
+    say "1. 读工具包根目录的 AGENTS.md，按第 0 节启动流程处理这个产品（有 docs/项目状态.md 就是老项目，从它记录的地方接着做）。"
+    say "2. 本阶段只读这些手册内容：${READ}。读完按 AGENTS.md 第 7 节做一次对账（列出与十条底线冲突的句子，没有就说\"已对账，无冲突\"）。"
+    say
+    say "## 本阶段要交的"
+    say "${OUT}"
+    say "证据包的固定文件见 AGENTS.md 第 5 节。"
+    say
+    say "## 产品经理这阶段要做的（由你翻译成\"去哪、点什么、填什么、看到什么算对\"）"
+    say "${PM}"
+    say
+    say "## 通过条件"
+    say "${PASS}"
+    if [ -n "$lastfail" ]; then
+      say
+      say "## 上次自检没过的项（先解决这些）"
+      say '```'
+      say "$lastfail"
+      say '```'
+    fi
+    say
+    say "## 规矩"
+    say "- 只做 ${st}，不做下一阶段的事。$( [ "$NOCODE" -eq 1 ] && say "这是无代码阶段，不要写代码、不要建 backend/ frontend/。" )"
+    say "- 需要产品经理决定的事，用决策卡当面问他（一次不超过 5 个），记入 docs/项目状态.md。"
+    say "- 做完后在工具包根目录运行 \`bash kit.sh 自检 ${PRODUCT}\`（它会跑 verify.sh 并记录结果），把六项结果抄进是否表。"
+    say "- 不要修改 docs/本阶段任务.md、docs/流程状态.txt、docs/流程历史.txt，它们归流程管家。"
+    if [ "$mode" = "chat" ]; then
+      say "- 自检通过后，把 docs/evidence/${st}/照着做清单.md 的内容用产品语言讲给产品经理，请他验收；他明确说\"验收通过\"后，才运行 \`bash kit.sh 通过 ${PRODUCT}\`（有分岔时按它提示带上下一阶段名）。他没说通过，就不要调。"
+    else
+      say "- 全部做完后对产品经理说这句话：\"本阶段做完了，请关闭我，回到开工窗口看自检结果。\""
+    fi
+  } > "$TASK"
+}
+
+run_verify() { # 跑自检并记状态；返回 verify 退出码
+  local st="$1" rc
+  bash verify.sh "$PRODUCT" "$st"; rc=$?
+  if [ "$rc" -eq 0 ]; then sset 状态 等验收; hist "${st} 自检通过"; else sset 状态 自检没过; hist "${st} 自检没过"; fi
+  return "$rc"
+}
+
+advance() { # $1 当前 $2 下一阶段
+  hist "$1 验收通过 → $2"; sset 阶段 "$2"; sset 状态 待开工; sset 开工次数 0
+}
+
+show_status() {
+  local st status
+  st="$(sget 阶段)"; status="$(sget 状态)"; stage_info "$st"
+  line; say "产品：${PRODUCT}"; say "阶段：${st}　　状态：${status}"
+  [ -n "$(sget 工具)" ] && say "编码工具：$(tool_name "$(sget 工具)")"
+  [ "$st" != "完成" ] && { say "本阶段要交：${OUT}"; say "本阶段你要做：${PM}"; }
+  line
+}
+
+# ---------- 编码工具（只有双击路线用） ----------
 tool_name() { case "$1" in
   claude) echo "Claude Code";; codex) echo "Codex";; pi) echo "Pi";; gemini) echo "Gemini CLI";; opencode) echo "OpenCode";;
   cursor) echo "Cursor 命令行版";; kimi) echo "Kimi Code";; mimo) echo "MiMo Code";; zcode) echo "Z Code";;
@@ -129,12 +223,9 @@ launch_tool() { # $1 工具 $2 开场白
       say "正在打开 $(tool_name "$t")，开场白已经贴好。像平时一样和它对话；它说\"本阶段做完了\"你就关掉它（输入 /exit 或按两次 Ctrl+C），回到这个窗口。"
       line
       case "$t" in
-        claude)   "$bin" "$prompt" ;;
-        codex)    "$bin" "$prompt" ;;
-        pi)       "$bin" "$prompt" ;;
+        claude|codex|pi|cursor) "$bin" "$prompt" ;;
         gemini)   "$bin" -i "$prompt" ;;
         opencode) "$bin" --prompt "$prompt" ;;
-        cursor)   "$bin" "$prompt" ;;
       esac ;;
     semi)
       if copy_clip "$prompt"; then say "开场白已复制到剪贴板。"; else say "开场白如下（请复制）："; say "    $prompt"; fi
@@ -151,139 +242,104 @@ launch_tool() { # $1 工具 $2 开场白
   line
 }
 
-# ---------- 本阶段任务文件 ----------
-write_task() { # $1 阶段
-  local st="$1" n lastfail=""
-  stage_info "$st"
-  n="$(sget 开工次数)"; n=$(( ${n:-0} + 1 )); sset 开工次数 "$n"
-  if [ "$(sget 状态)" = "自检没过" ] && [ -f "$P/docs/evidence/$st/verify-输出.txt" ]; then
-    lastfail="$( { grep -E '^(缺：|问题：|放错位置：)' "$P/docs/evidence/$st/verify-输出.txt"; sed -n '/汇总/,$p' "$P/docs/evidence/$st/verify-输出.txt" | grep -E '不通过|未配置|待验'; } | sort -u || true)"
-  fi
-  {
-    say "# 本阶段任务（流程管家自动生成，每次开工覆盖；AI 不要改这个文件）"
-    say
-    say "- 产品：${PRODUCT}（文件夹 projects/$PRODUCT/）"
-    say "- 阶段：${st}（本阶段第 $n 次开工）"
-    say "- 生成时间：$(date '+%Y-%m-%d %H:%M')"
-    say
-    say "## 先做"
-    say "1. 读工具包根目录的 AGENTS.md，按第 0 节启动流程处理这个产品（有 docs/项目状态.md 就是老项目，从它记录的地方接着做）。"
-    say "2. 本阶段只读这些手册内容：${READ}。读完按 AGENTS.md 第 7 节做一次对账（列出与十条底线冲突的句子，没有就说\"已对账，无冲突\"）。"
-    say
-    say "## 本阶段要交的"
-    say "$OUT"
-    say "证据包的固定文件见 AGENTS.md 第 5 节。"
-    say
-    say "## 产品经理这阶段要做的（由你翻译成\"去哪、点什么、填什么、看到什么算对\"）"
-    say "$PM"
-    say
-    say "## 通过条件"
-    say "$PASS"
-    if [ -n "$lastfail" ]; then
-      say
-      say "## 上次自检没过的项（先解决这些）"
-      say '```'
-      say "$lastfail"
-      say '```'
-    fi
-    say
-    say "## 规矩"
-    say "- 只做 ${st}，不做下一阶段的事。$( [ "$NOCODE" -eq 1 ] && say "这是无代码阶段，不要写代码、不要建 backend/ frontend/。" )"
-    say "- 需要产品经理决定的事，用决策卡当面问他（一次不超过 5 个），记入 docs/项目状态.md。"
-    say "- 做完后在工具包根目录运行 \`./verify.sh $PRODUCT $st\`，把六项结果抄进是否表。"
-    say "- 不要修改 docs/本阶段任务.md、docs/流程状态.txt、docs/流程历史.txt，它们归流程管家。"
-    say "- 全部做完后对产品经理说这句话：\"本阶段做完了，请关闭我，回到开工窗口看自检结果。\""
-  } > "$TASK"
-}
-
-# ---------- 翻到下一阶段 ----------
-next_stage() { # $1 当前 → 设置 NEXT（"完成" 表示结束）
-  local cur="$1" n
-  case "$cur" in
-    阶段0) NEXT=阶段1 ;;
-    阶段1) NEXT=阶段2-1 ;;
-    阶段2-*) n="${cur#阶段2-}"
-      if ask_yn "阶段 2 还有下一个子阶段吗？（看《技术适配声明》第 7 节子阶段规划）"; then NEXT="阶段2-$((n+1))"; else NEXT=阶段3-0; fi ;;
-    阶段3-0) NEXT=阶段3-1 ;;
-    阶段3-*) n="${cur#阶段3-}"
-      if ask_yn "阶段 3 还有下一个子阶段吗？（看《技术适配声明》第 7 节子阶段规划）"; then NEXT="阶段3-$((n+1))"
-      else
-        say "阶段 3 过了就算合格。接下来："; say "  4) 上线（阶段 4，要注册腾讯云）"; say "  5) 直接收尾（阶段 5，这次做到合格为止）"
-        while :; do ask "输入 4 或 5："; case "$ANS" in 4) NEXT=阶段4; break;; 5) NEXT=阶段5; break;; esac; done
-      fi ;;
-    阶段4) NEXT=阶段5 ;;
-    阶段5) NEXT=完成 ;;
-    *) NEXT=完成 ;;
-  esac
-}
-
-# ---------- 显示状态 ----------
-show_status() {
-  local st status
-  st="$(sget 阶段)"; status="$(sget 状态)"; stage_info "$st"
-  line; say "产品：$PRODUCT"; say "阶段：${st}　　状态：$status"
-  [ -n "$(sget 工具)" ] && say "编码工具：$(tool_name "$(sget 工具)")"
-  say "本阶段要交：$OUT"
-  say "本阶段你要做：$PM"
-  line
-}
-
-# ---------- 子命令 ----------
-case "${1:-}" in
+# ======================================================================
+# 主路线：AI 在对话里调用的子命令（不交互）
+# ======================================================================
+STAGE="$(sget 阶段)"; STATUS="$(sget 状态)"
+case "$CMD" in
   状态) show_status; exit 0 ;;
-  换工具) sset 工具 ""; say "好，下次开工会重新问用哪个工具。"; exit 0 ;;
-  回到) [ -n "${2:-}" ] || { say "用法：bash kit.sh 回到 阶段2-1"; exit 1; }
-       sset 阶段 "$2"; sset 状态 待开工; sset 开工次数 0; hist "手动校正到 $2"; say "已回到 $2。"; exit 0 ;;
+
+  任务)
+    if [ "$STAGE" = "完成" ]; then say "这个产品的流程已经走完。要再改，先：bash kit.sh 回到 ${PRODUCT} 阶段X"; exit 0; fi
+    if [ "$STATUS" = "等验收" ]; then
+      say "${STAGE} 的自检已经通过，现在等产品经理验收。"
+      say "把 docs/evidence/${STAGE}/照着做清单.md 讲给他，请他验收；他说\"验收通过\"后运行：bash kit.sh 通过 ${PRODUCT}"
+      say "他要改东西，就改完再跑一次：bash kit.sh 自检 ${PRODUCT}"
+      exit 0
+    fi
+    write_task "$STAGE" chat; sset 状态 做中; hist "${STAGE} 开工（第 $(sget 开工次数) 次，对话模式）"
+    cat "$TASK"; exit 0 ;;
+
+  自检)
+    if [ "$STAGE" = "完成" ]; then say "流程已完成，没有要自检的阶段。"; exit 0; fi
+    run_verify "$STAGE"; rc=$?
+    line
+    if [ "$rc" -eq 0 ]; then say "管家记录：${STAGE} 自检通过，状态=等验收。下一步请产品经理验收；他说\"验收通过\"后运行：bash kit.sh 通过 ${PRODUCT}"
+    else say "管家记录：${STAGE} 自检没过，状态=自检没过。先补上面报的项，再跑一次自检。不能进下一阶段。"; fi
+    exit "$rc" ;;
+
+  通过)
+    WANT="${1:-}"
+    if [ "$STAGE" = "完成" ]; then say "流程已完成。"; exit 0; fi
+    if [ "$STATUS" != "等验收" ]; then
+      say "拒绝：${STAGE} 的状态是\"${STATUS}\"，不是\"等验收\"。先运行 bash kit.sh 自检 ${PRODUCT} 并通过，再请产品经理验收。"; exit 1
+    fi
+    next_options "$STAGE"
+    if [ -n "$NEXT_FIXED" ]; then
+      [ -n "$WANT" ] && [ "$WANT" != "$NEXT_FIXED" ] && { say "拒绝：${STAGE} 之后只能是 ${NEXT_FIXED}。"; exit 1; }
+      NEXT="$NEXT_FIXED"
+    else
+      if [ -z "$WANT" ]; then
+        say "${STAGE} 之后有分岔，请先问产品经理，再带上下一阶段名重新运行：bash kit.sh 通过 ${PRODUCT} <下一阶段>"
+        explain_options "$STAGE"; exit 1
+      fi
+      ok=0; for o in $NEXT_OPTS; do [ "$o" = "$WANT" ] && ok=1; done
+      [ "$ok" -eq 1 ] || { say "拒绝：${STAGE} 之后只能是：${NEXT_OPTS}"; explain_options "$STAGE"; exit 1; }
+      NEXT="$WANT"
+    fi
+    advance "$STAGE" "$NEXT"
+    if [ "$NEXT" = "完成" ]; then say "已记录：${STAGE} 验收通过。全部完成！"; else say "已记录：${STAGE} 验收通过，翻到 ${NEXT}。下一步运行：bash kit.sh 任务 ${PRODUCT}"; fi
+    exit 0 ;;
+
+  回到)
+    WANT="${1:-}"; valid_stage "$WANT" || { say "用法：bash kit.sh 回到 ${PRODUCT} 阶段2-1（阶段名要像 阶段0、阶段2-1、阶段3-0 这样）"; exit 1; }
+    sset 阶段 "$WANT"; sset 状态 待开工; sset 开工次数 0; hist "手动校正到 ${WANT}"; say "已回到 ${WANT}。"; exit 0 ;;
+
+  换工具) sset 工具 ""; say "好，下次双击开工会重新问用哪个工具。"; exit 0 ;;
   "") ;;
-  *) say "不认识的参数：$1。可用：状态 / 换工具 / 回到 阶段X"; exit 1 ;;
+  *) say "不认识的子命令：${CMD}。可用：任务 / 自检 / 通过 / 状态 / 回到 / 换工具（见 kit.sh 开头）"; exit 1 ;;
 esac
 
-# ---------- 主流程 ----------
-STAGE="$(sget 阶段)"; STATUS="$(sget 状态)"
-if [ "$STAGE" = "完成" ]; then show_status; say "这个产品的流程已经走完。要再做改动，用 bash kit.sh 回到 阶段X 回到对应阶段。"; exit 0; fi
+# ======================================================================
+# 副路线：双击 开工.command（交互）
+# ======================================================================
+if [ "$STAGE" = "完成" ]; then show_status; say "这个产品的流程已经走完。"; exit 0; fi
 show_status
 
 if [ "$STATUS" = "等验收" ]; then
-  say "上次自检已通过，现在轮到你验收：按 docs/evidence/$STAGE/照着做清单.md 点一遍（无代码阶段就是看文档、确认该确认的事）。"
+  say "上次自检已通过，现在轮到你验收：按 docs/evidence/${STAGE}/照着做清单.md 点一遍（无代码阶段就是看文档、确认该确认的事）。"
   if ask_yn "验收通过了吗？"; then
-    next_stage "$STAGE"; hist "$STAGE 验收通过 → $NEXT"
-    sset 阶段 "$NEXT"; sset 状态 待开工; sset 开工次数 0
+    next_options "$STAGE"
+    if [ -n "$NEXT_FIXED" ]; then NEXT="$NEXT_FIXED"
+    else
+      say "接下来去哪？"; explain_options "$STAGE"
+      while :; do ask "输入阶段名（如 $(echo $NEXT_OPTS | cut -d' ' -f1)）："; ok=0; for o in $NEXT_OPTS; do [ "$o" = "$ANS" ] && ok=1; done; [ "$ok" -eq 1 ] && { NEXT="$ANS"; break; }; say "只能是：${NEXT_OPTS}"; done
+    fi
+    advance "$STAGE" "$NEXT"
     if [ "$NEXT" = "完成" ]; then say "全部完成！"; exit 0; fi
     say "已翻到 ${NEXT}。"
-    if ! ask_yn "现在就开始做 $NEXT 吗？"; then say "好，下次双击开工继续。"; exit 0; fi
+    if ! ask_yn "现在就开始做 ${NEXT} 吗？"; then say "好，下次双击开工继续。"; exit 0; fi
     STAGE="$NEXT"; STATUS=待开工; show_status
   else
-    sset 状态 做中; hist "$STAGE 验收未通过，继续改"
+    sset 状态 做中; hist "${STAGE} 验收未通过，继续改"
     say "好，留在 ${STAGE}。把没通过的地方告诉 AI 去改。"
     if ! ask_yn "现在打开工具继续改吗？"; then exit 0; fi
   fi
 fi
 
-# 选工具
 TOOL="$(sget 工具)"
 if [ -z "$TOOL" ]; then choose_tool; sset 工具 "$TOOL"; fi
-# 写任务、开工
-write_task "$STAGE"; sset 状态 做中; hist "$STAGE 开工（第 $(sget 开工次数) 次，工具 $(tool_name "$TOOL")）"
-PROMPT="请读取 projects/$PRODUCT/docs/本阶段任务.md，按其中要求做 ${STAGE}。"
+write_task "$STAGE" window; sset 状态 做中; hist "${STAGE} 开工（第 $(sget 开工次数) 次，工具 $(tool_name "$TOOL")）"
+PROMPT="请读取 projects/${PRODUCT}/docs/本阶段任务.md，按其中要求做 ${STAGE}。"
 launch_tool "$TOOL" "$PROMPT"
 
-# 自检
-say "工具已关闭，现在跑自检：bash verify.sh $PRODUCT $STAGE"
+say "工具已关闭，现在跑自检：bash verify.sh ${PRODUCT} ${STAGE}"
 line
-bash verify.sh "$PRODUCT" "$STAGE"; RC=$?
+run_verify "$STAGE"; RC=$?
 line
 if [ "$RC" -eq 0 ]; then
-  sset 状态 等验收; hist "$STAGE 自检通过"
-  say "自检通过。下一步轮到你验收：按 docs/evidence/$STAGE/照着做清单.md 点一遍（无代码阶段就是看文档、确认该确认的事）。"
-  if ask_yn "验收通过了吗？（还没看就先选 n，下次双击开工再回答）"; then
-    next_stage "$STAGE"; hist "$STAGE 验收通过 → $NEXT"
-    sset 阶段 "$NEXT"; sset 状态 待开工; sset 开工次数 0
-    if [ "$NEXT" = "完成" ]; then say "全部完成！"; else say "已翻到 ${NEXT}。下次双击开工就从它开始。"; fi
-  else
-    say "好，留在 $STAGE 等验收。验收完再双击开工回答。"
-  fi
+  say "自检通过。下一步轮到你验收：按 docs/evidence/${STAGE}/照着做清单.md 点一遍（无代码阶段就是看文档、确认该确认的事）。"
+  say "验收完再双击开工，回答\"验收通过了吗\"。"
 else
-  sset 状态 自检没过; hist "$STAGE 自检没过"
-  say "自检没过（上面有哪几项）。不能进下一阶段。"
-  say "下次双击开工，AI 会看到没过的项并补齐；也可以现在把上面的结果贴给它。"
+  say "自检没过（上面有哪几项）。不能进下一阶段。下次双击开工，AI 会看到没过的项并补齐。"
 fi
