@@ -1,0 +1,84 @@
+verify.sh 自检  2026-11-04 19:45:27  产品：端侧AI-Studio（/Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio）
+
+================ 1. mock 自动化测试 ================
+...............                                                          [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/starlette/testclient.py:40
+  /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/backend/.venv/lib/python3.12/site-packages/starlette/testclient.py:40: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = typing.Callable[[], typing.ContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+15 passed, 1 warning in 0.28s
+infinite-canvas ui ok
+结果：通过（15/15）；前端测试通过
+
+================ 2. 真实模型冒烟记录（docs/evidence/<阶段>/冒烟记录.md，须由冒烟脚本写入，格式见通用手册第十节） ================
+有：docs/evidence/阶段2-2/冒烟记录.md，模型 DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，3 次真实调用，最近一次 2026-11-04 19:20:15
+结果：有记录（DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，3 次，最近 2026-11-04 19:20:15）
+
+================ 3. 密钥排除（扫描整个仓库会进 git 的文件，以及本产品的构建产物） ================
+通过：没有 .env 文件被 git 跟踪。
+通过：会进仓库的文件中未发现密钥样式字符串。
+通过：构建产物 projects/端侧AI-Studio/frontend/dist 未发现密钥样式字符串。
+通过：projects/端侧AI-Studio/backend/.env 中 DEEPSEEK_API_KEY 的值未出现在任何跟踪文件或构建产物中。
+通过：projects/端侧AI-Studio/backend/.env 中 SENSETIME_API_KEYS 的值未出现在任何跟踪文件或构建产物中。
+结果：通过
+
+================ 4. 数据重启恢复（verify.sh 自己起服务、写随机标记、杀进程、再起、读回；钩子 scripts/restart-check.sh 只提供 start/write/read/stop） ================
+通过：起服务（PID 99216）→ 写入随机标记 → 杀掉 → 再起（PID 99277）→ 按 ID 22f438e97a134ba2ba2851678397fd93 读回，标记一致。
+结果：通过（进程 99216→99277，随机标记读回一致）
+
+================ 5. 前端类型检查 / Lint / 生产构建 ================
+
+> infinite-canvas@0.1.0 lint
+> tsc --noEmit --pretty false
+
+
+> infinite-canvas@0.1.0 build
+> vite build
+
+vite v7.3.6 building client environment for production...
+(node:99396) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+transforming...
+✓ 8681 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/services/image-storage.ts is dynamically imported by /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-node-generation.ts but also statically imported by /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/agent/local-agent-panel.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/asset-picker-modal.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-node-reference-bar.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-node.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-side-panel.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/lib/agent/agent-site-tools.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/lib/canvas/canvas-export.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/lib/canvas/canvas-generation-helpers.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/lib/canvas/canvas-resource-references.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/assets/asset-transfer.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/assets/index.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/canvas/hooks/use-plugin-host.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/canvas/index.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/canvas/project.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/image/index.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/video/index.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/services/api/image.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/services/api/video.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/services/app-sync.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/stores/use-asset-store.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/stores/canvas/use-canvas-store.ts is dynamically imported by /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/stores/use-asset-store.ts but also statically imported by /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-delete-projects-dialog.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/components/canvas/canvas-project-card.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/lib/agent/agent-site-tools.ts, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/canvas/index.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/pages/canvas/project.tsx, /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/frontend/src/services/app-sync.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/plugins/index.json                                0.00 kB │ gzip:     0.02 kB
+dist/index.html                                        1.06 kB │ gzip:     0.58 kB
+dist/assets/index-D40c9SXs.css                       109.57 kB │ gzip:    18.95 kB
+dist/assets/highlighted-body-OFNGDK62-iiybgg_Q.js      0.44 kB │ gzip:     0.31 kB
+dist/assets/index-CDyeFcxW.js                      3,738.77 kB │ gzip: 1,169.28 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 4.80s
+结果：通过
+
+================ 6. 文件齐全与位置（AGENTS.md 第 7 节的产出清单；根目录不放产品文件；前面阶段有没有被跳过） ================
+通过：根目录没有放错位置的文件。
+有：docs/阶段文档/阶段2-2技术开发文档.md
+有：docs/项目状态.md
+有：README.md
+有：docs/evidence/阶段2-2/照着做清单.md
+有：docs/evidence/阶段2-2/是否表.md
+有：docs/evidence/阶段2-2/ 下 2 张截图
+通过：前面阶段（阶段0 阶段1 阶段2-1）的产物都在。
+结果：通过
+
+================ 汇总（抄进是否表的就是这六行） ================
+是否表第 2 项  mock 测试：      通过（15/15）；前端测试通过
+是否表第 3 项  真实模型冒烟：   有记录（DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，3 次，最近 2026-11-04 19:20:15）
+是否表第 4 项  前端检查与构建： 通过
+是否表第 5 项  密钥排除：       通过
+是否表第 6 项  重启后数据恢复： 通过（进程 99216→99277，随机标记读回一致）
+是否表第 10 项 文件齐全与位置： 通过
+总判定：六项全部通过或不适用。

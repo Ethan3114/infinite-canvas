@@ -1,0 +1,72 @@
+verify.sh 自检  2026-11-04 18:24:36  产品：端侧AI-Studio（/Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio）
+
+================ 1. mock 自动化测试 ================
+............                                                             [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/starlette/testclient.py:40
+  /Users/ethan/Documents/测试题（中等难度）/projects/端侧AI-Studio/backend/.venv/lib/python3.12/site-packages/starlette/testclient.py:40: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = typing.Callable[[], typing.ContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+12 passed, 1 warning in 0.17s
+camera ok
+结果：通过（12/12）；前端测试通过
+
+================ 2. 真实模型冒烟记录（docs/evidence/<阶段>/冒烟记录.md，须由冒烟脚本写入，格式见通用手册第十节） ================
+有：docs/evidence/阶段2-1/冒烟记录.md，模型 DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，4 次真实调用，最近一次 2026-11-04 18:23:39
+结果：有记录（DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，4 次，最近 2026-11-04 18:23:39）
+
+================ 3. 密钥排除（扫描整个仓库会进 git 的文件，以及本产品的构建产物） ================
+通过：没有 .env 文件被 git 跟踪。
+通过：会进仓库的文件中未发现密钥样式字符串。
+通过：构建产物 projects/端侧AI-Studio/frontend/dist 未发现密钥样式字符串。
+通过：projects/端侧AI-Studio/backend/.env 中 DEEPSEEK_API_KEY 的值未出现在任何跟踪文件或构建产物中。
+通过：projects/端侧AI-Studio/backend/.env 中 SENSETIME_API_KEYS 的值未出现在任何跟踪文件或构建产物中。
+结果：通过
+
+================ 4. 数据重启恢复（verify.sh 自己起服务、写随机标记、杀进程、再起、读回；钩子 scripts/restart-check.sh 只提供 start/write/read/stop） ================
+通过：起服务（PID 49853）→ 写入随机标记 → 杀掉 → 再起（PID 49902）→ 按 ID 1e243ec4600948dc8885021633a785e9 读回，标记一致。
+结果：通过（进程 49853→49902，随机标记读回一致）
+
+================ 5. 前端类型检查 / Lint / 生产构建 ================
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> studio-canvas@0.1.0 lint
+> tsc --noEmit
+
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> studio-canvas@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v6.0.6 building for production...
+transforming...
+✓ 30 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.40 kB │ gzip:  0.29 kB
+dist/assets/index-Dqnxfdmu.css    2.38 kB │ gzip:  1.05 kB
+dist/assets/index-DmkLGi65.js   191.71 kB │ gzip: 61.02 kB
+✓ built in 257ms
+结果：通过
+
+================ 6. 文件齐全与位置（AGENTS.md 第 7 节的产出清单；根目录不放产品文件；前面阶段有没有被跳过） ================
+通过：根目录没有放错位置的文件。
+有：docs/阶段文档/阶段2-1技术开发文档.md
+有：docs/项目状态.md
+有：README.md
+有：docs/evidence/阶段2-1/照着做清单.md
+有：docs/evidence/阶段2-1/是否表.md
+有：docs/evidence/阶段2-1/ 下 2 张截图
+通过：前面阶段（阶段0 阶段1）的产物都在。
+结果：通过
+
+================ 汇总（抄进是否表的就是这六行） ================
+是否表第 2 项  mock 测试：      通过（12/12）；前端测试通过
+是否表第 3 项  真实模型冒烟：   有记录（DeepSeek deepseek-flash / 商汤 sensenova-u1.5-lite，4 次，最近 2026-11-04 18:23:39）
+是否表第 4 项  前端检查与构建： 通过
+是否表第 5 项  密钥排除：       通过
+是否表第 6 项  重启后数据恢复： 通过（进程 49853→49902，随机标记读回一致）
+是否表第 10 项 文件齐全与位置： 通过
+总判定：六项全部通过或不适用。
