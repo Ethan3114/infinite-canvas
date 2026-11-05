@@ -1,4 +1,4 @@
-"""生成卡和出图的后台步骤。商汤同一时间只跑一个任务，钥匙用完或失败后换下一把。"""
+"""生成卡和出图的后台步骤。每把商汤钥匙同时只出一张，多的任务排队。"""
 
 import threading
 from pathlib import Path
@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.models import Asset, Job, ProviderState
 from app.services.cards import image_prompt, parse_card
 from app.services.files import ensure_min_size, read_asset, save_bytes
+from app.services.key_pool import run_with_key
 from app.services.providers import DeepSeekClient, ModelError, SenseTimeClient
 
 _thread_lock = threading.Lock()
@@ -90,9 +91,6 @@ def run_image(
                 return
             state.lock_job_id = job_id
             job.status = "running"
-            key = ""
-            if keys:
-                key = keys[state.key_index % len(keys)]
             db.commit()
         try:
             asset = db.get(Asset, job.upload_asset_id)
@@ -102,7 +100,8 @@ def run_image(
             card = GenerationCard.model_validate_json(card_text)
             raw = read_asset(Path(settings.resolved_data_dir()), asset.relpath).read_bytes()
             raw, mime = ensure_min_size(raw)
-            image = client.generate(key, image_prompt(card), raw, mime)
+            # 和画布共用同一排坑位，避免后台任务和页面抢到同一把钥匙。
+            image = run_with_key(keys, lambda key: client.generate(key, image_prompt(card), raw, mime))
             rel = save_bytes(Path(settings.resolved_data_dir()), job.owner_id, image, "image/png")
             saved = Asset(
                 id=_new_id(),
@@ -127,8 +126,6 @@ def run_image(
                 state = seed_provider(db)
                 if state.lock_job_id == job_id:
                     state.lock_job_id = ""
-                    if keys:
-                        state.key_index = (state.key_index + 1) % len(keys)
                 db.commit()
     finally:
         db.close()

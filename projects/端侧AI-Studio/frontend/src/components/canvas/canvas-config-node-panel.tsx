@@ -8,6 +8,8 @@ import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveC
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { EcommerceOptionsPanel } from "./ecommerce-options-panel";
+import { readEcommercePurposes, readEcommerceSizes } from "@/lib/canvas/ecommerce-options";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
@@ -19,13 +21,14 @@ type CanvasConfigNodePanelProps = {
     node: CanvasNodeData;
     isRunning: boolean;
     inputSummary: { textCount: number; imageCount: number; videoCount: number; audioCount: number };
+    linkedPromptCount?: number;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void;
     onGenerate: (nodeId: string) => void;
     onStop: (nodeId: string) => void;
     onComposerToggle: () => void;
 };
 
-export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigChange, onGenerate, onStop, onComposerToggle }: CanvasConfigNodePanelProps) {
+export function CanvasConfigNodePanel({ node, isRunning, inputSummary, linkedPromptCount = 0, onConfigChange, onGenerate, onStop, onComposerToggle }: CanvasConfigNodePanelProps) {
     const { t } = useTranslation();
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -38,9 +41,13 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
     const hasAnyInput = Boolean(inputSummary.textCount || inputSummary.imageCount || inputSummary.videoCount || inputSummary.audioCount);
     const hasComposerContent = Boolean((node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim());
     const canGenerate = hasComposerContent || (mode === "audio" ? inputSummary.textCount > 0 : hasAnyInput);
+    const ecommerce = !drama && (mode === "image" || mode === "text");
+    const purposeCount = readEcommercePurposes(node.metadata?.ecommercePurposes).length;
+    const sizeCount = readEcommerceSizes(node.metadata?.ecommerceSizes).length;
+    const ecommerceCount = mode === "image" ? Math.max(1, linkedPromptCount) * sizeCount * Math.max(1, inputSummary.imageCount) : purposeCount;
 
     return (
-        <div className="flex h-full w-full cursor-move flex-col px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
+        <div className="flex h-full w-full cursor-move flex-col overflow-hidden px-3 pb-3 pt-7 text-sm" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
             <div className="mb-2 flex items-center justify-between gap-3">
                 <div className="shrink-0 text-sm font-semibold">{t("canvas.configNode.title")}</div>
                 <div className="cursor-default" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
@@ -113,6 +120,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                     )}
                 </div>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
             {drama ? (
                 <div className="mb-2 cursor-default" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()}>
                     <div className="flex max-h-72 flex-col gap-1 overflow-y-auto pr-1">
@@ -142,6 +150,15 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                     </div>
                     <p className="mt-1 text-[11px] leading-5" style={{ color: theme.node.muted }}>{t(dramaTask.hintKey)}</p>
                 </div>
+            ) : ecommerce ? (
+                <EcommerceOptionsPanel
+                    mode={mode === "text" ? "text" : "image"}
+                    metadata={node.metadata}
+                    textColor={theme.node.text}
+                    mutedColor={theme.node.muted}
+                    fill={theme.node.fill}
+                    onChange={(patch) => onConfigChange(node.id, patch)}
+                />
             ) : null}
 
             <div className="mb-2 flex flex-wrap gap-1.5">
@@ -159,18 +176,23 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                 <ModelPicker className="canvas-compact-control h-10" config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability={mode} onMissingConfig={() => openConfigDialog(true)} fullWidth />
                 {mode === "video" ? (
                     <CanvasVideoSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
-                ) : mode === "image" ? (
+                ) : mode === "image" && !ecommerce ? (
                     <CanvasImageSettingsPopover config={config} placement="topRight" autoAdjustOverflow={false} buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })} />
+                ) : mode === "image" ? (
+                    <div className="canvas-compact-control flex h-10 items-center truncate rounded-lg border px-2 text-xs" style={chipStyle}>{t("canvas.configNode.images", { count: ecommerceCount })}</div>
                 ) : mode === "audio" ? (
                     <CanvasAudioSettingsPopover config={config} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))} />
+                ) : ecommerce ? (
+                    <div className="canvas-compact-control flex h-10 items-center truncate rounded-lg border px-2 text-xs" style={chipStyle}>{t("canvas.configNode.items", { count: ecommerceCount })}</div>
                 ) : (
                     <CanvasTextSettingsPopover config={config} count={node.metadata?.textCount || 1} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })} onCountChange={(textCount) => onConfigChange(node.id, { textCount })} />
                 )}
             </div>
+            </div>
 
             <Button
                 type="primary"
-                className="mt-auto !h-9 !w-full !cursor-pointer !rounded-lg"
+                className="mt-2 !h-9 !w-full !shrink-0 !cursor-pointer !rounded-lg"
                 danger={isRunning}
                 disabled={!isRunning && !canGenerate}
                 onMouseDown={(event) => event.stopPropagation()}
@@ -186,7 +208,7 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                     ) : (
                         <>
                             <Play className="size-4" />
-                            <span>{t("canvas.configNode.generate")}</span>
+                            <span>{ecommerce ? t(mode === "text" ? "canvas.configNode.generateTexts" : "canvas.configNode.generateCount", { count: ecommerceCount }) : t("canvas.configNode.generate")}</span>
                         </>
                     )}
                 </span>

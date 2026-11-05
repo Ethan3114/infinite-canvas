@@ -100,6 +100,48 @@ def test_card_parse_retries_once(tmp_settings):
     assert deepseek.calls == 2
 
 
+def test_one_inflight_image_per_key():
+    import threading
+    import time
+
+    from app.services.key_pool import reset_key_pool, run_with_key
+
+    reset_key_pool()
+    keys = ["k1", "k2", "k3"]
+    entered = []
+    hold = threading.Event()
+
+    def occupy(key: str) -> str:
+        entered.append(key)
+        hold.wait(3)
+        return key
+
+    workers = [threading.Thread(target=lambda: run_with_key(keys, occupy)) for _ in range(3)]
+    for worker in workers:
+        worker.start()
+    deadline = time.time() + 2
+    while len(entered) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    assert sorted(entered) == ["k1", "k2", "k3"]
+
+    fourth = []
+
+    def later(key: str) -> str:
+        fourth.append(key)
+        return key
+
+    waiting = threading.Thread(target=lambda: run_with_key(keys, later))
+    waiting.start()
+    time.sleep(0.2)
+    assert fourth == []
+    hold.set()
+    waiting.join(2)
+    for worker in workers:
+        worker.join(2)
+    assert len(fourth) == 1
+    assert fourth[0] in keys
+
+
 def test_three_keys_rotate(tmp_path, tmp_settings):
     from app.main import create_app
     from tests.conftest import FakeSense
@@ -188,22 +230,51 @@ def test_canvas_gateway_returns_image(clients):
     assert sense.prompts[0] == "木质桌面"
 
 
-def test_two_skus_are_generated_serially_and_sizes_skip_model(clients):
+def test_edit_uses_one_request_per_size_and_ignores_n(clients):
     client, _, sense, _ = clients
     png = MIN_PNG
     files = [
         ("image", ("a.png", png, "image/png")),
         ("image", ("b.png", png, "image/png")),
     ]
-    response = client.post("/v1/images/edits", data={"prompt": "同一套日光风格", "n": "1"}, files=files)
+    response = client.post("/v1/images/edits", data={"prompt": "同一套日光风格", "n": "4", "size": "2720x1536"}, files=files)
     assert response.status_code == 200
-    assert len(response.json()["data"]) == 2
-    assert sense.keys == ["k1", "k2"]
-    before = len(sense.keys)
-    sized = client.post("/v1/images/sizes", files={"image": ("a.png", png, "image/png")})
+    assert len(response.json()["data"]) == 1
+    assert sense.keys == ["k1"]
+    assert sense.sizes == ["2720x1536"]
+
+
+def test_illegal_size_falls_back_to_square_2k(clients):
+    client, _, sense, _ = clients
+    response = client.post("/v1/images/generations", json={"prompt": "木质桌面", "n": 3, "size": "100x100"})
+    assert response.status_code == 200
+    assert len(response.json()["data"]) == 1
+    assert sense.sizes == ["2048x2048"]
+
+
+def test_size_pack_does_not_call_the_model(clients):
+    client, _, sense, _ = clients
+    sized = client.post("/v1/images/sizes", files={"image": ("a.png", MIN_PNG, "image/png")})
     assert sized.status_code == 200
     assert len(sized.json()["data"]) == 3
-    assert len(sense.keys) == before
+    assert sense.keys == []
+
+
+def test_three_image_types_have_different_guides():
+    from app.services.cards import system_prompt, type_guide
+
+    guides = [type_guide(name) for name in ("主图", "场景图", "商品图")]
+    assert all(guides)
+    assert len(set(guides)) == 3
+    for name in ("主图", "场景图", "商品图"):
+        assert name in system_prompt()
+
+
+def test_ecommerce_purpose_selects_the_card_type(clients):
+    client, deepseek, _, _ = clients
+    response = client.post("/v1/responses", json={"input": "放到桌面上", "workflow": "ecommerce", "purpose": "scene"})
+    assert response.status_code == 200
+    assert deepseek.image_type == "场景图"
 
 
 def test_text_generation_uses_deepseek_vision(clients):

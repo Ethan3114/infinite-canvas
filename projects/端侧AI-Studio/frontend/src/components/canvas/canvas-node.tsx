@@ -784,9 +784,22 @@ function ImageContent({
     return (
         <BatchFrame batchCount={batchCount} batchExpanded={batchExpanded}>
             {batchExpanded
-                ? images
-                      .filter((image) => image.id !== primaryImageId)
-                      .map((image, index) => <ExpandedImageCard key={image.id} node={node} image={image} index={index} scale={scale} onView={() => onViewBatchImage?.(image.id)} onSetPrimary={() => onSetBatchPrimary?.(image.id)} onDuplicate={() => onDuplicateBatchImage?.(image.id)} onDownload={() => onDownloadBatchImage?.(image.id)} onRetry={() => onRetryBatchImage?.(image.id)} onDelete={() => onDeleteBatchImage?.(image.id)} />)
+                ? layoutBatchCards(images, primaryImageId, node.width, node.height).map((item) => (
+                      <ExpandedImageCard
+                          key={item.image.id}
+                          node={node}
+                          image={item.image}
+                          index={item.slot}
+                          frame={item}
+                          scale={scale}
+                          onView={() => onViewBatchImage?.(item.image.id)}
+                          onSetPrimary={() => onSetBatchPrimary?.(item.image.id)}
+                          onDuplicate={() => onDuplicateBatchImage?.(item.image.id)}
+                          onDownload={() => onDownloadBatchImage?.(item.image.id)}
+                          onRetry={() => onRetryBatchImage?.(item.image.id)}
+                          onDelete={() => onDeleteBatchImage?.(item.image.id)}
+                      />
+                  ))
                 : null}
             <div className="h-full w-full overflow-hidden rounded-3xl">
                 {primaryContent ? (
@@ -829,7 +842,46 @@ function ImageContent({
     );
 }
 
-function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, onDuplicate, onDownload, onRetry, onDelete }: { node: CanvasNodeData; image: CanvasNodeImage; index: number; scale: number; onView: () => void; onSetPrimary: () => void; onDuplicate: () => void; onDownload: () => void; onRetry: () => void; onDelete: () => void }) {
+function layoutBatchCards(images: CanvasNodeImage[], primaryId: string | undefined, frameWidth: number, frameHeight: number) {
+    const count = images.length;
+    const columns = Math.min(Math.max(count, 1), 4);
+    const rows = Math.ceil(count / columns);
+    const rootSlot = (rows - 1) * columns;
+    const others = images.filter((image) => image.id !== primaryId);
+    const slots: Array<CanvasNodeImage | null> = Array.from({ length: rows * columns }, () => null);
+    let cursor = 0;
+    for (let index = 0; index < slots.length; index += 1) {
+        if (index === rootSlot) continue;
+        slots[index] = others[cursor] || null;
+        cursor += 1;
+    }
+    const heightOf = (image: CanvasNodeImage | null) => {
+        const width = image?.naturalWidth || 0;
+        const height = image?.naturalHeight || 0;
+        if (!width || !height) return frameHeight;
+        return Math.max(80, Math.round(frameWidth * (height / width)));
+    };
+    const rowHeights = Array.from({ length: rows }, (_, row) => {
+        let max = row === rows - 1 ? frameHeight : 0;
+        for (let column = 0; column < columns; column += 1) max = Math.max(max, heightOf(slots[row * columns + column]));
+        return max || frameHeight;
+    });
+    const rowTops: number[] = [];
+    let top = 0;
+    for (let row = rows - 1; row >= 0; row -= 1) {
+        rowTops[row] = top;
+        top -= rowHeights[row] + 18;
+    }
+    return others.flatMap((image) => {
+        const slot = slots.findIndex((item) => item?.id === image.id);
+        if (slot < 0) return [];
+        const row = Math.floor(slot / columns);
+        const column = slot % columns;
+        return [{ image, slot, left: column * (frameWidth + 18), top: rowTops[row], width: frameWidth, height: heightOf(image) }];
+    });
+}
+
+function ExpandedImageCard({ node, image, index, frame, scale, onView, onSetPrimary, onDuplicate, onDownload, onRetry, onDelete }: { node: CanvasNodeData; image: CanvasNodeImage; index: number; frame?: { left: number; top: number; width: number; height: number }; scale: number; onView: () => void; onSetPrimary: () => void; onDuplicate: () => void; onDownload: () => void; onRetry: () => void; onDelete: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
@@ -840,16 +892,18 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
     const slot = index >= rootSlot ? index + 1 : index;
     const column = slot % columns;
     const row = Math.floor(slot / columns);
-    const x = column * (node.width + 18);
-    const y = (row - rows + 1) * (node.height + 18);
+    const x = frame ? frame.left : column * (node.width + 18);
+    const y = frame ? frame.top : (row - rows + 1) * (node.height + 18);
+    const cardWidth = frame?.width || node.width;
+    const cardHeight = frame?.height || node.height;
     const source = image.content
         ? pickImageSource({
               previewUrl: previewUrlFor(image.storageKey),
               originalUrl: image.content,
               naturalWidth: image.naturalWidth,
               naturalHeight: image.naturalHeight,
-              renderedWidth: node.width,
-              renderedHeight: node.height,
+              renderedWidth: cardWidth,
+              renderedHeight: cardHeight,
               scale,
           })
         : undefined;
@@ -861,8 +915,8 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
                 {
                     left: x,
                     top: y,
-                    width: node.width,
-                    height: node.height,
+                    width: cardWidth,
+                    height: cardHeight,
                     background: "transparent",
                     borderColor: theme.node.stroke,
                     "--batch-from-x": `${-x}px`,

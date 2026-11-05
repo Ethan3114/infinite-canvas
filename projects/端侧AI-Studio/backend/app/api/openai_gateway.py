@@ -1,10 +1,12 @@
 """给 infinite-canvas 用的图片接口。
 
-画布按 OpenAI 的地址来请求。钥匙留在后端，商汤同一时间只出一张。
+画布按 OpenAI 的地址来请求。钥匙留在后端。
+每把商汤钥匙同时只出一张，多的请求排队；有几把钥匙就能同时出几张。
 """
 
+import asyncio
 import base64
-import threading
+import logging
 import time
 
 from fastapi import APIRouter, Request
@@ -12,26 +14,20 @@ from fastapi.responses import JSONResponse
 
 from app.services.cards import image_prompt, parse_card
 from app.services.files import ensure_min_size, pack_sizes
+from app.services.sensetime_payload import PURPOSE_LABELS, normalize_sensetime_size
+from app.services.key_pool import run_with_key
 from app.services.providers import AntVideoClient, ModelError, concat_mp4
-from app.services.runner import seed_provider
 from app.services.storyboard import format_drama, parse_drama, system_prompt as drama_system
 
 router = APIRouter()
-_lock = threading.Lock()
 
 
 def _fail(message: str, status: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"message": message, "type": "invalid_request_error"}})
 
 
-def _size(value: object) -> str:
-    text = str(value or "")
-    parts = text.lower().split("x")
-    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-        width, height = int(parts[0]), int(parts[1])
-        if 256 <= width <= 4096 and 256 <= height <= 4096:
-            return f"{width}x{height}"
-    return "1024x1024"
+def _flag(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
 
 
 def _message_parts(messages: list) -> tuple[str, bytes | None, str]:
@@ -60,11 +56,11 @@ def _message_parts(messages: list) -> tuple[str, bytes | None, str]:
     return "\n".join(part for part in texts if part.strip()).strip(), *(image or (None, ""))
 
 
-def _prompt_from_messages(request: Request, messages: list) -> str:
+def _prompt_from_messages(request: Request, messages: list, purpose: str = "") -> str:
     user_text, raw, mime = _message_parts(messages)
     if not user_text and raw is None:
         raise ModelError("没有要看的文字或图片")
-    image_type = "主图" if "主图" in user_text else "场景图"
+    image_type = PURPOSE_LABELS.get(purpose) or ("主图" if "主图" in user_text else "场景图" if "场景" in user_text else "商品图" if "商品图" in user_text else "主图")
     client = request.app.state.card_client
     last = "DeepSeek 没有写成提示词"
     for _ in range(2):
@@ -105,20 +101,8 @@ def _call(request: Request, fn):
     keys = settings.sensetime_keys()
     if not keys and not settings.fake_models:
         raise ModelError("还没有配置商汤钥匙")
-    with _lock:
-        db = request.app.state.factory()
-        try:
-            state = seed_provider(db)
-            key = keys[state.key_index % len(keys)] if keys else ""
-            try:
-                image = fn(key)
-            finally:
-                if keys:
-                    state.key_index = (state.key_index + 1) % len(keys)
-                db.commit()
-        finally:
-            db.close()
-    return image
+    # 排队发生在工作线程里，不能卡住页面上别的请求。
+    return run_with_key(keys, fn)
 
 
 @router.post("/v1/videos/frames")
@@ -191,7 +175,8 @@ async def responses(request: Request):
     if workflow == "drama" and not task:
         return _fail("请选择短剧的这一步")
     try:
-        text = _drama_from_messages(request, messages, task) if workflow == "drama" else _prompt_from_messages(request, messages)
+        purpose = str(body.get("purpose") or "")
+        text = _drama_from_messages(request, messages, task) if workflow == "drama" else _prompt_from_messages(request, messages, purpose)
     except ModelError as exc:
         return _fail(exc.message, 502)
     return {"output_text": text, "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}]}
@@ -203,17 +188,15 @@ async def generations(request: Request):
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
         return _fail("缺少画面描述")
-    count = max(1, min(int(body.get("n") or 1), 4))
-    size = _size(body.get("size"))
+    size = normalize_sensetime_size(body.get("size"))
+    watermark = _flag(body.get("watermark"))
+    prompt_extend = _flag(body.get("prompt_extend"))
     client = request.app.state.image_client
-    data = []
     try:
-        for _ in range(count):
-            image = _call(request, lambda key: client.generate_text(key, prompt, size))
-            data.append({"b64_json": base64.b64encode(image).decode()})
+        image = await asyncio.to_thread(_call, request, lambda key: client.generate_text(key, prompt, size, watermark, prompt_extend))
     except ModelError as exc:
         return _fail(exc.message, 502)
-    return {"created": int(time.time()), "data": data}
+    return {"created": int(time.time()), "data": [{"b64_json": base64.b64encode(image).decode()}]}
 
 
 @router.post("/v1/images/edits")
@@ -235,14 +218,20 @@ async def edits(request: Request):
         except Exception:
             return _fail("这张图打不开")
     client = request.app.state.image_client
-    data = []
+    primary, extras = prepared[0], prepared[1:5]
+    size = normalize_sensetime_size(form.get("size"), allow_auto=True)
+    watermark = _flag(form.get("watermark"))
+    prompt_extend = _flag(form.get("prompt_extend"))
+    logging.getLogger("uvicorn.error").info("edit size=%s refs=%d", size, len(prepared))
     try:
-        for raw, mime in prepared:
-            image = _call(request, lambda key, raw=raw, mime=mime: client.generate(key, prompt, raw, mime))
-            data.append({"b64_json": base64.b64encode(image).decode()})
+        image = await asyncio.to_thread(
+            _call,
+            request,
+            lambda key, raw=primary[0], mime=primary[1]: client.generate(key, prompt, raw, mime, size, watermark, prompt_extend, extras),
+        )
     except ModelError as exc:
         return _fail(exc.message, 502)
-    return {"created": int(time.time()), "data": data}
+    return {"created": int(time.time()), "data": [{"b64_json": base64.b64encode(image).decode()}]}
 
 
 @router.post("/v1/images/sizes")

@@ -21,9 +21,11 @@ class FakeDeepSeek:
         self.saw_image = False
         self.kind = "ecommerce"
         self.task = ""
+        self.image_type = ""
 
     def complete(self, raw: bytes, mime: str, user_text: str, image_type: str) -> str:
         self.saw_image = bool(raw)
+        self.image_type = image_type
         self.calls += 1
         if self.bad_first and self.calls == 1:
             return "请看这里，不是 JSON"
@@ -55,15 +57,18 @@ class FakeSense:
     def __init__(self):
         self.keys: list[str] = []
         self.prompts: list[str] = []
+        self.sizes: list[str] = []
 
-    def generate(self, api_key: str, prompt: str, raw: bytes, mime: str) -> bytes:
+    def generate(self, api_key: str, prompt: str, raw: bytes, mime: str, size: str = "2048x2048", watermark: bool = False, prompt_extend: bool = False, extras=None) -> bytes:
         self.keys.append(api_key)
         self.prompts.append(prompt)
+        self.sizes.append(size)
         return MIN_PNG
 
-    def generate_text(self, api_key: str, prompt: str, size: str) -> bytes:
+    def generate_text(self, api_key: str, prompt: str, size: str, watermark: bool = False, prompt_extend: bool = False) -> bytes:
         self.keys.append(api_key)
         self.prompts.append(prompt)
+        self.sizes.append(size)
         return MIN_PNG
 
 

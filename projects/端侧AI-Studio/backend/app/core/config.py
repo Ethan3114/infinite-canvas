@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     deepseek_model: str = ""
     sensetime_api_keys: str = ""
     sensetime_base_url: str = "https://token.sensenova.cn/v1"
-    sensetime_model: str = "sensenova-u1.5-lite"
+    sensetime_model: str = "sensenova-u1.5-fast"
     ant_api_key: str = ""
     ant_base_url: str = "https://maas-api.antdigital.com"
     ant_video_model: str = "wan2.7-i2v"
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     session_days: int = 7
     max_upload_bytes: int = 10 * 1024 * 1024
     deepseek_timeout: float = 60
-    sensetime_timeout: float = 180
+    sensetime_timeout: float = 600
 
     model_config = SettingsConfigDict(extra="ignore")
 

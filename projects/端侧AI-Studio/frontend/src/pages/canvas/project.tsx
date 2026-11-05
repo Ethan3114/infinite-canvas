@@ -5,7 +5,7 @@ import { Group, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
-import { requestEdit, requestGeneration, requestImageQuestion, requestSizePack } from "@/services/api/image";
+import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -78,6 +78,7 @@ import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } fr
 import { CanvasWorkflowDialog } from "@/components/canvas/canvas-workflow-dialog";
 import { normalizeWorkflow, setActiveWorkflow, setActiveDramaTask, getActiveWorkflow, type CanvasWorkflow } from "@/lib/canvas/workflow";
 import { dramaImagePrompt } from "@/lib/canvas/drama-tasks";
+import { linkedImagePrompts, readEcommercePurposes, readEcommerceSizes, setActiveEcommercePurpose, setActiveImageRequest } from "@/lib/canvas/ecommerce-options";
 import { buildShotFrameGraph, parsePlotShots } from "@/lib/canvas/plot-shots";
 import {
     CanvasNodeType,
@@ -472,7 +473,7 @@ function InfiniteCanvasPage() {
                       },
                   };
               })
-            : project.nodes;
+            : project.nodes.map((node) => (node.type === CanvasNodeType.Config ? { ...node, height: Math.max(node.height, 480) } : node));
         const restore = async () => {
             const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(sourceNodes));
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
@@ -655,7 +656,7 @@ function InfiniteCanvasPage() {
         [message, t],
     );
 
-    const fitDramaConfig = (node: CanvasNodeData) => (getActiveWorkflow() === "drama" && node.type === CanvasNodeType.Config ? { ...node, height: Math.max(node.height, 480) } : node);
+    const fitDramaConfig = (node: CanvasNodeData) => (node.type === CanvasNodeType.Config ? { ...node, height: Math.max(node.height, 480) } : node);
 
     const configNodeMetadata = useCallback(() => {
         if (getActiveWorkflow() === "drama") {
@@ -2596,8 +2597,13 @@ function InfiniteCanvasPage() {
                             ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
                     const referenceImages = [...new Map([...sourceReference, ...generationContext.referenceImages].map((image) => [image.id, image])).values()];
-                    const skuMode = getActiveWorkflow() === "ecommerce" && referenceImages.length > 1;
-                    const count = skuMode ? referenceImages.length : requestedCount;
+                    const ecommerce = getActiveWorkflow() === "ecommerce";
+                    const sizes = ecommerce ? readEcommerceSizes(sourceNode?.metadata?.ecommerceSizes) : [generationConfig.size || "2048x2048"];
+                    const promptList = ecommerce ? linkedImagePrompts(nodeId, nodesRef.current, connectionsRef.current) : [];
+                    const imagePrompts = promptList.length ? promptList : [effectivePrompt || prompt];
+                    const productGroups = ecommerce && referenceImages.length > 1 ? referenceImages.map((image) => [image]) : [referenceImages];
+                    const jobs = productGroups.flatMap((refs) => imagePrompts.flatMap((promptText) => sizes.map((size) => ({ id: nanoid(), refs, promptText, size }))));
+                    const count = ecommerce ? jobs.length : requestedCount;
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
                     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
                     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];
@@ -2605,12 +2611,12 @@ function InfiniteCanvasPage() {
                     const parentPosition = sourceNode?.position || { x: 0, y: 0 };
                     const pendingImage = isConfigNode && !reuseImageNode ? findPendingOutput(nodeId, CanvasNodeType.Image) : undefined;
                     const rootId = reuseImageNode ? nodeId : pendingImage?.id || nanoid();
-                    const imageIds = Array.from({ length: count }, () => nanoid());
+                    const imageIds = ecommerce ? jobs.map((job) => job.id) : Array.from({ length: count }, () => nanoid());
                     pendingChildIds = [rootId];
                     const rootNode: CanvasNodeData = {
                         id: rootId,
                         type: CanvasNodeType.Image,
-                        title: effectivePrompt.slice(0, 32) || "Generated Image",
+                        title: ecommerce ? `${count} 张` : effectivePrompt.slice(0, 32) || "Generated Image",
                         position: {
                             x: reuseImageNode ? parentPosition.x : parentPosition.x + parentConfig.width + 96,
                             y: parentPosition.y + parentConfig.height / 2 - imageConfig.height / 2,
@@ -2671,28 +2677,17 @@ function InfiniteCanvasPage() {
                     let hasSuccess = false;
                     let hasFailure = false;
                     let firstError = "";
-                    let packedSizes = false;
-                    for (const [index, imageId] of imageIds.entries()) {
+                    setActiveImageRequest({ watermark: sourceNode?.metadata?.imageWatermark === "true", promptExtend: sourceNode?.metadata?.promptExtend === "true" });
+                    // 一起发出去。后端按钥匙坑位分配：一把钥匙同时只出一张，多的在后端排队。
+                    await Promise.all(imageIds.map(async (imageId, index) => {
                             try {
-                                const refs = skuMode ? [referenceImages[index]] : referenceImages;
+                                const job = jobs[index];
+                                const refs = ecommerce && job ? job.refs : referenceImages;
+                                const jobSize = ecommerce && job ? job.size : generationConfig.size;
+                                const jobPrompt = ecommerce && job ? job.promptText : imagePrompt;
                                 const image = refs.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, imagePrompt, refs, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, imagePrompt, { signal: controller.signal }).then((items) => items[0]);
-                                if (skuMode && !packedSizes) {
-                                    packedSizes = true;
-                                    const sized = await requestSizePack(generationConfig, image.dataUrl, { signal: controller.signal });
-                                    const extras: CanvasNodeImage[] = [];
-                                    for (const item of sized) {
-                                        const saved = await uploadImage(item.dataUrl, { signal: controller.signal });
-                                        extras.push({ id: nanoid(), status: NODE_STATUS_SUCCESS, content: saved.url, storageKey: saved.storageKey, naturalWidth: saved.width, naturalHeight: saved.height, bytes: saved.bytes, mimeType: saved.mimeType });
-                                    }
-                                    setNodes((prev) =>
-                                        prev.map((node) => {
-                                            if (node.id !== rootId) return node;
-                                            return { ...node, metadata: { ...node.metadata, images: [...(node.metadata?.images || []), ...extras] } };
-                                        }),
-                                    );
-                                }
+                                    ? await requestEdit({ ...generationConfig, count: "1", size: jobSize }, jobPrompt, refs, { signal: controller.signal }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1", size: jobSize }, jobPrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
@@ -2723,13 +2718,13 @@ function InfiniteCanvasPage() {
                                 hasSuccess = true;
                                 if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
                             } catch (error) {
-                                if (isGenerationCanceled(error)) continue;
+                                if (isGenerationCanceled(error)) return;
                                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                                 if (!firstError) firstError = errorDetails;
                                 hasFailure = true;
                                 setNodes((prev) => prev.map((node) => (node.id === rootId ? { ...node, metadata: { ...node.metadata, images: node.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } } : node)));
                             }
-                    }
+                    }));
                     if (rootId !== nodeId) finishGenerationRequest(rootId, controller);
                     if (controller.signal.aborted) {
                         setNodes((prev) => prev.map((node) => (node.id === nodeId && isConfigNode && node.metadata?.status === NODE_STATUS_LOADING ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
@@ -2829,6 +2824,55 @@ function InfiniteCanvasPage() {
                     } finally {
                         finishGenerationRequest(audioId, controller);
                     }
+                    return;
+                }
+
+                if (getActiveWorkflow() === "ecommerce" && sourceNode?.type === CanvasNodeType.Config) {
+                    const purposes = readEcommercePurposes(sourceNode.metadata?.ecommercePurposes);
+                    const textSpec = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
+                    const made = purposes.map((purpose, index) => {
+                        const id = nanoid();
+                        const textNode: CanvasNodeData = {
+                            id,
+                            type: CanvasNodeType.Text,
+                            title: `${purpose.label}提示词`,
+                            position: { x: sourceNode.position.x + sourceNode.width + 96, y: sourceNode.position.y + index * (textSpec.height + 28) },
+                            width: textSpec.width,
+                            height: textSpec.height,
+                            metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, fontSize: 14, model: generationConfig.model, ecommercePurpose: purpose.id, content: "" },
+                        };
+                        return { purpose, textNode };
+                    });
+                    pendingChildIds = made.map((item) => item.textNode.id);
+                    setNodes((prev) => [
+                        ...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, outputNodeId: made[0]?.textNode.id } } : node)),
+                        ...made.map((item) => item.textNode),
+                    ]);
+                    setConnections((prev) => [...prev, ...made.map((item) => ({ id: nanoid(), fromNodeId: nodeId, toNodeId: item.textNode.id }))]);
+                    let success = 0;
+                    for (const item of made) {
+                        if (runController.signal.aborted) break;
+                        setActiveEcommercePurpose(item.purpose.id);
+                        let streamed = "";
+                        try {
+                            const answer = await requestImageQuestion(
+                                generationConfig,
+                                buildNodeResponseMessages({ ...generationContext, prompt: `${effectivePrompt}\n这一步只写${item.purpose.label}的生图提示词。${item.purpose.instruction}` }),
+                                (text) => {
+                                    streamed = text;
+                                    setNodes((prev) => prev.map((node) => (node.id === item.textNode.id ? { ...node, metadata: { ...node.metadata, content: text } } : node)));
+                                },
+                                { signal: runController.signal },
+                            );
+                            success += 1;
+                            setNodes((prev) => prev.map((node) => (node.id === item.textNode.id ? { ...node, metadata: { ...node.metadata, content: answer || streamed, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
+                        } catch (error) {
+                            if (isGenerationCanceled(error)) break;
+                            const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
+                            setNodes((prev) => prev.map((node) => (node.id === item.textNode.id ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                        }
+                    }
+                    setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: success ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: success ? undefined : t("canvas.projectPage.generationFailed") } } : node)));
                     return;
                 }
 
@@ -3344,6 +3388,7 @@ function InfiniteCanvasPage() {
                 node={contentNode}
                 isRunning={runningNodeId === contentNode.id}
                 inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                linkedPromptCount={linkedImagePrompts(contentNode.id, nodes, connections).length}
                 onConfigChange={handleConfigNodeChange}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                 onStop={confirmStopGeneration}
@@ -3353,7 +3398,7 @@ function InfiniteCanvasPage() {
                 }}
             />
         ),
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
+        [configInputsById, confirmStopGeneration, connections, handleConfigNodeChange, handleGenerateNode, nodes, runningNodeId],
     );
 
     const hoverPreviewNode = hoverPreviewNodeId ? nodeById.get(hoverPreviewNodeId) || null : null;

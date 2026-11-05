@@ -4,7 +4,7 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { DEEPSEEK_TEXT_MODEL, DEEPSEEK_TEXT_SCRIPT, LOCAL_IMAGE_API_KEY, LOCAL_IMAGE_BASE_URL, SENSENOVA_IMAGE_MODEL, SENSENOVA_IMAGE_SCRIPT } from "@/lib/sensetime-image-script";
+import { DEEPSEEK_TEXT_MODEL, DEEPSEEK_TEXT_SCRIPT, LEGACY_SENSENOVA_IMAGE_MODEL, LOCAL_IMAGE_API_KEY, LOCAL_IMAGE_BASE_URL, SENSENOVA_IMAGE_MODEL, SENSENOVA_IMAGE_SCRIPT } from "@/lib/sensetime-image-script";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -170,7 +170,9 @@ export function guessCapability(name: string): ModelCapability {
 
 function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
     const decoded = decodeChannelModel(value);
-    const name = decoded?.model || value;
+    // 老画布节点里可能还记着 Lite，找的时候直接当 Fast。
+    const rawName = decoded?.model || value;
+    const name = rawName === LEGACY_SENSENOVA_IMAGE_MODEL ? SENSENOVA_IMAGE_MODEL : rawName;
     const channel = decoded ? config.channels.find((item) => item.id === decoded.channelId) : config.channels.find((item) => item.models.some((model) => model.name === name));
     const model = channel?.models.find((item) => item.name === name);
     return channel && model ? { channel, model } : null;
@@ -253,7 +255,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
+                const config = upgradeLegacyImageModel({ ...defaultConfig, ...persistedConfig });
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
                 const channels = attachSenseTimeScript(normalizeChannels(config));
                 const models = modelOptionsFromChannels(channels);
@@ -313,10 +315,17 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
     return result;
 }
 
+/** 旧画布里存的是 Lite。统一换成 Fast，包括通道里的模型清单和已选模型。 */
+function upgradeLegacyImageModel<T extends Partial<AiConfig>>(config: T): T {
+    const swap = (value: string | undefined) => (typeof value === "string" ? value.split(LEGACY_SENSENOVA_IMAGE_MODEL).join(SENSENOVA_IMAGE_MODEL) : value);
+    const models = Array.isArray(config.models) ? [...new Set(config.models.map((item) => swap(item) as string))] : config.models;
+    return { ...config, model: swap(config.model), imageModel: swap(config.imageModel), models };
+}
+
 function attachSenseTimeScript(channels: ModelChannel[]) {
     return channels.map((channel) => {
-        let models = channel.models.map((model) => {
-            if (model.name === SENSENOVA_IMAGE_MODEL) return { ...model, capability: "image" as const, script: model.script?.trim() || SENSENOVA_IMAGE_SCRIPT };
+        let models = channel.models.filter((model) => !(channel.id === "default" && model.name === LEGACY_SENSENOVA_IMAGE_MODEL)).map((model) => {
+            if (model.name === SENSENOVA_IMAGE_MODEL) return { ...model, capability: "image" as const, script: channel.id === "default" ? SENSENOVA_IMAGE_SCRIPT : model.script?.trim() || SENSENOVA_IMAGE_SCRIPT };
             if (model.name === DEEPSEEK_TEXT_MODEL) return { ...model, capability: "text" as const, script: channel.id === "default" ? DEEPSEEK_TEXT_SCRIPT : model.script?.trim() || DEEPSEEK_TEXT_SCRIPT };
             return model;
         });

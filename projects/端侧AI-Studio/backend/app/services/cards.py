@@ -23,6 +23,18 @@ def system_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
+TYPE_GUIDE = {
+    "主图": "纯净背景，棚拍光，商品居中占画面主体，完整正面展示外观",
+    "场景图": "放进真实生活场景，有环境和搭配道具，自然光，商品仍是主角",
+    "商品图": "突出细节和卖点的特写或局部放大，换取景角度，不要写成整体正面居中的主图",
+}
+
+
+def type_guide(image_type: str) -> str:
+    """每种图类型各自的写法。三种要彼此不同，不能让模型自己猜。"""
+    return TYPE_GUIDE.get(image_type, "")
+
+
 def parse_card(text: str, image_type: str) -> GenerationCard:
     raw = text.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw, re.DOTALL)

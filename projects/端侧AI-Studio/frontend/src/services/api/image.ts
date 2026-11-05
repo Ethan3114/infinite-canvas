@@ -10,6 +10,7 @@ import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 import { getActiveDramaTask, getActiveWorkflow } from "@/lib/canvas/workflow";
+import { getActiveEcommercePurpose, getActiveImageRequest, SENSENOVA_SIZES } from "@/lib/canvas/ecommerce-options";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -164,6 +165,17 @@ function validateImageSize(width: number, height: number) {
     if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error(apiText("imageRatioLimit"));
     const pixels = width * height;
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error(apiText("imagePixelLimit"));
+}
+
+function resolveSenseTimeSize(size: string) {
+    const value = size.trim();
+    if (SENSENOVA_SIZES.some((item) => item.pixels === value)) return value;
+    return resolveRequestSize(size);
+}
+
+function senseTimeRequestFields() {
+    const request = getActiveImageRequest();
+    return { watermark: request.watermark, promptExtend: request.promptExtend };
 }
 
 function resolveRequestSize(size: string) {
@@ -698,7 +710,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(config.size);
+        const requestSize = resolveSenseTimeSize(config.size);
         const background = normalizeBackground(config.background);
         try {
             const result = await runModelPlugin({
@@ -707,7 +719,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, prompt),
                 images: [],
-                params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: 1, ...senseTimeRequestFields(), ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -759,7 +771,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(config.size);
+        const requestSize = resolveSenseTimeSize(config.size);
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
@@ -769,7 +781,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, requestPrompt),
                 images: refs,
-                params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: 1, ...senseTimeRequestFields(), ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -842,7 +854,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
                 script,
                 config: requestConfig,
                 messages: withSystemMessage(requestConfig, messages),
-                params: { workflow: getActiveWorkflow(), task: getActiveDramaTask() },
+                params: { workflow: getActiveWorkflow(), task: getActiveDramaTask(), purpose: getActiveEcommercePurpose() },
                 signal: options?.signal,
                 onDelta,
             });

@@ -24,7 +24,7 @@ export function buildShotFrameGraph(
 ) {
     const nodes: CanvasNodeData[] = [];
     const connections: CanvasConnection[] = [];
-    const imageModel = "default::sensenova-u1.5-lite";
+    const imageModel = "default::sensenova-u1.5-fast";
     shots.forEach((shot, index) => {
         const y = anchor.y + index * 520;
         const textId = `shot-text-${plotNodeId}-${shot.no}`;

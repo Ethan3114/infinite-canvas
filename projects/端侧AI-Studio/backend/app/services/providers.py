@@ -1,14 +1,18 @@
 """DeepSeek 写生成卡，商汤按确认后的卡出图。失败最多再试一次，不把钥匙写进错误信息。"""
 
 import base64
+import logging
 import re
 
 import httpx
 
 from app.core.config import Settings
-from app.services.cards import system_prompt
+from app.services.cards import system_prompt, type_guide
 from app.services.files import data_url
 from app.services.sensetime_payload import build_edit_payload
+
+
+log = logging.getLogger("studio.model")
 
 
 class ModelError(Exception):
@@ -16,16 +20,25 @@ class ModelError(Exception):
         self.message = message
 
 
-def _post(url: str, headers: dict, payload: dict, timeout: float) -> httpx.Response:
+def _post(url: str, headers: dict, payload: dict, timeout: float, resend: bool = True) -> httpx.Response:
+    """resend=False 用于出图：请求发出后断了，商汤那边可能还在画，
+    再发一次会让同一把钥匙同时跑两张，所以只在还没连上时才重发。"""
     last_error = "网络没有连上"
     for _ in range(2):
         try:
-            response = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-        except httpx.HTTPError:
+            response = httpx.post(url, headers=headers, json=payload, timeout=httpx.Timeout(timeout, connect=20))
+        except httpx.HTTPError as exc:
+            # 只记错误类型和主机名，不记钥匙、提示词和图片。
+            log.warning("model call failed: %s host=%s", type(exc).__name__, httpx.URL(url).host)
             last_error = "网络超时或中断"
+            if not resend and not isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+                break
             continue
         if response.status_code >= 500:
+            log.warning("model call status=%s host=%s", response.status_code, httpx.URL(url).host)
             last_error = "模型服务暂时不可用"
+            if not resend:
+                break
             continue
         return response
     raise ModelError(last_error)
@@ -47,7 +60,7 @@ class DeepSeekClient:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"图类型：{image_type}\n用户的话：{user_text}"},
+                        {"type": "text", "text": f"图类型：{image_type}（{type_guide(image_type)}）\n用户的话：{user_text}"},
                         {"type": "image_url", "image_url": {"url": data_url(mime, raw)}},
                     ],
                 },
@@ -76,7 +89,7 @@ class DeepSeekClient:
             "temperature": 0.2,
             "messages": [
                 {"role": "system", "content": system_prompt()},
-                {"role": "user", "content": f"图类型：{image_type}\n用户的话：{user_text}\n没有参考图，按文字写生成卡。"},
+                {"role": "user", "content": f"图类型：{image_type}（{type_guide(image_type)}）\n用户的话：{user_text}\n没有参考图，按文字写生成卡。"},
             ],
         }
         response = _post(
@@ -133,16 +146,27 @@ class SenseTimeClient:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def generate(self, api_key: str, prompt: str, raw: bytes, mime: str) -> bytes:
+    def generate(
+        self,
+        api_key: str,
+        prompt: str,
+        raw: bytes,
+        mime: str,
+        size: str = "2048x2048",
+        watermark: bool = False,
+        prompt_extend: bool = False,
+        extras: list[tuple[bytes, str]] | None = None,
+    ) -> bytes:
         if not api_key:
             raise ModelError("还没有配置商汤钥匙")
         url = self.settings.sensetime_base_url.rstrip("/") + "/images/edits"
-        payload = build_edit_payload(self.settings.sensetime_model, prompt, mime, raw)
+        payload = build_edit_payload(self.settings.sensetime_model, prompt, mime, raw, size, watermark, prompt_extend, extras)
         response = _post(
             url,
             {"Authorization": f"Bearer {api_key}"},
             payload,
             self.settings.sensetime_timeout,
+            resend=False,
         )
         if response.status_code >= 400:
             raise ModelError(_api_message(response, "商汤没有出图"))
@@ -160,7 +184,7 @@ class SenseTimeClient:
             return downloaded.content
         raise ModelError("商汤没有返回图片")
 
-    def generate_text(self, api_key: str, prompt: str, size: str) -> bytes:
+    def generate_text(self, api_key: str, prompt: str, size: str, watermark: bool = False, prompt_extend: bool = False) -> bytes:
         if not api_key:
             raise ModelError("还没有配置商汤钥匙")
         url = self.settings.sensetime_base_url.rstrip("/") + "/images/generations"
@@ -169,8 +193,8 @@ class SenseTimeClient:
             "prompt": prompt,
             "n": 1,
             "size": size,
-            "watermark": False,
-            "prompt_extend": False,
+            "watermark": watermark,
+            "prompt_extend": prompt_extend,
             "response_format": "b64_json",
             "output_format": "png",
         }
@@ -179,6 +203,7 @@ class SenseTimeClient:
             {"Authorization": f"Bearer {api_key}"},
             payload,
             self.settings.sensetime_timeout,
+            resend=False,
         )
         if response.status_code >= 400:
             raise ModelError(_api_message(response, "商汤没有出图"))
@@ -204,7 +229,7 @@ def _api_message(response: httpx.Response, fallback: str) -> str:
         message = fallback
     message = re.sub(r"sk-[A-Za-z0-9_-]{6,}", "", message)
     if "width and height" in message:
-        return "商品图太小或比例不对。宽高需要在 256 到 4096 之间。"
+        return "尺寸不符合商汤要求。宽高都要是 32 的倍数，在 512 到 4096 之间，长短边不超过 3 比 1。"
     return (message or fallback)[:300]
 
 

@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException
+from starlette.types import Scope
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -15,14 +17,28 @@ from app.api.openai_gateway import router as openai_router
 from app.api.routes import router
 from app.core.config import Settings, load_settings
 from app.models import Base
+from app.services.key_pool import reset_key_pool
 from app.services.providers import DeepSeekClient, SenseTimeClient
 from app.services.runner import recover_lock
 
 log = logging.getLogger("studio")
 
 
+class CanvasFiles(StaticFiles):
+    """画布地址是前端自己的路由。找不到文件时交回页面，刷新某张画布不再变成 404。"""
+
+    async def get_response(self, path: str, scope: Scope):
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code != 404 or "." in Path(path).name:
+                raise
+            return await super().get_response("index.html", scope)
+
+
 def create_app(settings: Settings | None = None, card_client=None, image_client=None) -> FastAPI:
     settings = settings or load_settings()
+    reset_key_pool()
     data_dir = settings.resolved_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "files").mkdir(parents=True, exist_ok=True)
@@ -61,7 +77,7 @@ def create_app(settings: Settings | None = None, card_client=None, image_client=
 
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=dist, html=True), name="ui")
+        app.mount("/", CanvasFiles(directory=dist, html=True), name="ui")
     return app
 
 

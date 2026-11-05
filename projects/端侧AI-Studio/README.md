@@ -38,7 +38,7 @@ npm run dev
 
 改完后重新启动后端。没有钥匙时，页面能打开，但生成会停在「还没有配置钥匙」，不会出现假图。
 
-商汤默认地址是 `https://token.sensenova.cn/v1`，模型是 `sensenova-u1.5-lite`。如果控制台不是这个，只改 `.env` 里的地址和模型名。
+商汤默认地址是 `https://token.sensenova.cn/v1`，模型是 `sensenova-u1.5-fast`（比 Lite 快很多，一张图几秒）。如果控制台不是这个，只改 `.env` 里的地址和模型名。
 
 ## 验证
 

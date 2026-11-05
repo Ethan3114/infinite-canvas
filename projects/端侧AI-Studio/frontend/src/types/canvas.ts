@@ -53,6 +53,11 @@ export type CanvasNodeMetadata = {
     fontSize?: number;
     generationMode?: CanvasGenerationMode;
     dramaTask?: string;
+    ecommercePurposes?: string;
+    ecommerceSizes?: string;
+    ecommercePurpose?: string;
+    imageWatermark?: string;
+    promptExtend?: string;
     pendingResult?: boolean;
     outputNodeId?: string;
     plotSpawnOf?: string;
