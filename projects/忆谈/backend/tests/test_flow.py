@@ -53,7 +53,12 @@ def test_reject_bad_photo(client):
 def test_accept_jpeg(client):
     login(client)
     profile_id = client.post("/api/v1/profiles", json={"elder_name": "李奶奶"}).json()["id"]
-    jpeg = b"\xff\xd8\xff" + b"\x00" * 16
+    from io import BytesIO
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new("RGB", (32, 32), color="white").save(output, format="JPEG")
+    jpeg = output.getvalue()
     response = client.post(f"/api/v1/profiles/{profile_id}/photos", files={"file": ("old.jpg", jpeg, "image/jpeg")})
     assert response.status_code == 200
     assert sniff_image(jpeg) == "image/jpeg"

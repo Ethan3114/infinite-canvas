@@ -19,6 +19,18 @@ class ProfileIn(BaseModel):
 class CallIn(BaseModel):
     profile_id: str
     consent: bool
+    request_id: str | None = Field(default=None, min_length=1, max_length=60)
+    photo_id: str | None = None
+    topic: str = Field(default="", max_length=500)
+
+
+class BookIn(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+
+
+class DraftTaskIn(BaseModel):
+    request_id: str = Field(min_length=1, max_length=60)
+    replace: bool = False
 
 
 class ScoreIn(BaseModel):

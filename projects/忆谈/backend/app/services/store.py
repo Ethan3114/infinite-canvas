@@ -1,6 +1,9 @@
 """档案、通话和文件的读写。查询都带 owner_id。"""
 
 import uuid
+import io
+import wave
+from PIL import Image, UnidentifiedImageError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,13 +28,15 @@ def new_id() -> str:
 
 
 def sniff_image(data: bytes) -> str | None:
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.width * image.height > 25000000:
+                return None
+            kind = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(image.format)
+            image.verify()
+            return kind
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        return None
 
 
 def safe_original_name(name: str) -> str:
@@ -121,11 +126,14 @@ def save_photo(db: Session, fernet: Fernet, data_dir: Path, owner_id: str, profi
     return row
 
 
-def create_call(db: Session, owner_id: str, profile_id: str) -> Call:
+def create_call(db: Session, owner_id: str, profile_id: str, *, commit: bool = True) -> Call:
     row = Call(id=new_id(), owner_id=owner_id, profile_id=profile_id, status="live")
     db.add(row)
-    add_audit(db, owner_id, "consent", "granted")
-    db.commit()
+    db.add(AuditLog(id=new_id(), owner_id=owner_id, action="consent", result="granted"))
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(row)
     return row
 
@@ -151,8 +159,11 @@ def save_audio(db: Session, fernet: Fernet, data_dir: Path, owner_id: str, call_
     rel = f"files/{call_id}-{kind}.bin"
     blob = encrypt_bytes(fernet, pcm)
     (data_dir / rel).write_bytes(blob)
-    row = AudioAsset(id=new_id(), owner_id=owner_id, call_id=call_id, kind=kind, relpath=rel, size_bytes=len(pcm))
-    db.add(row)
+    row = db.scalar(select(AudioAsset).where(AudioAsset.owner_id == owner_id, AudioAsset.call_id == call_id, AudioAsset.kind == kind))
+    if row is None:
+        row = AudioAsset(id=new_id(), owner_id=owner_id, call_id=call_id, kind=kind, relpath=rel, size_bytes=len(pcm))
+        db.add(row)
+    row.size_bytes = len(pcm)
     db.commit()
     return row
 
@@ -196,22 +207,10 @@ def finish_call(db: Session, call: Call, status: str, failure_code: str = "") ->
 
 
 def pcm16_to_wav(pcm: bytes, rate: int) -> bytes:
-    import struct
-
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + len(pcm),
-        b"WAVE",
-        b"fmt ",
-        16,
-        1,
-        1,
-        rate,
-        rate * 2,
-        2,
-        16,
-        b"data",
-        len(pcm),
-    )
-    return header + pcm
+    output = io.BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(pcm)
+    return output.getvalue()

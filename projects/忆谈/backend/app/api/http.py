@@ -6,12 +6,16 @@ from collections.abc import Generator
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from sqlalchemy import select, text
 
 from app.core.config import Settings
 from app.core.errors import error_response
 from app.schemas import CallIn, FactIn, LoginIn, ProfileIn, ScoreIn
 from app.services import store
+from app.models import AudioAsset, BookSettings, CallContext, DraftTask, Photo
+from app.services.tasks import task_view
 from app.services.draft import DraftError, build_draft, chapter_views, score_paragraph, update_fact
+from app.services.writing import WritingError
 from app.services.tingwu import TingwuError, ensure_full_transcript
 
 router = APIRouter(prefix="/api/v1")
@@ -36,7 +40,7 @@ def login(body: LoginIn, request: Request, db: Session = Depends(db_session)):
         return error_response(401, "invite_invalid", "邀请码不正确")
     row = store.login_owner(db, settings.session_days)
     response = Response(content='{"ok":true}', media_type="application/json")
-    response.set_cookie(store.COOKIE, row.id, httponly=True, samesite="lax", max_age=settings.session_days * 86400)
+    response.set_cookie(store.COOKIE, row.id, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=settings.session_days * 86400)
     return response
 
 
@@ -90,10 +94,14 @@ def profile_detail(profile_id: str, db: Session = Depends(db_session), owner: st
                 "texts": texts,
                 "chapter": views[0] if views else None,
                 "chapters": views,
+                "created_at": call.created_at.isoformat(),
+                "audio_kinds": list(db.scalars(select(AudioAsset.kind).where(AudioAsset.call_id == call.id, AudioAsset.owner_id == owner))),
+                "task": task_view(task) if (task := db.scalar(select(DraftTask).where(DraftTask.call_id == call.id).order_by(DraftTask.created_at.desc()))) else None,
             }
         )
     return {
         "id": row.id,
+        "book_title": book.title if (book := db.get(BookSettings, row.id)) else f"{row.elder_name}的故事",
         "elder_name": row.elder_name,
         "birth_year": row.birth_year,
         "hometown": row.hometown,
@@ -111,7 +119,7 @@ async def upload_photo(profile_id: str, request: Request, file: UploadFile = Fil
     row = store.get_profile(db, owner, profile_id)
     if row is None:
         return error_response(404, "not_found", "找不到这位老人的档案")
-    data = await file.read()
+    data = await file.read(store.MAX_PHOTO + 1)
     if len(data) > store.MAX_PHOTO:
         return error_response(400, "file_too_large", "照片不能超过 10 MB")
     kind = store.sniff_image(data)
@@ -125,6 +133,15 @@ async def upload_photo(profile_id: str, request: Request, file: UploadFile = Fil
 def open_call(body: CallIn, request: Request, db: Session = Depends(db_session), owner: str | None = Depends(current_owner)):
     if owner is None:
         return error_response(401, "unauthorized", "请先登录")
+    db.commit()
+    db.execute(text("BEGIN IMMEDIATE"))
+    key = f"{owner}:{body.request_id or store.new_id()}"
+    previous = db.get(CallContext, key)
+    if previous is not None:
+        call = store.get_call(db, owner, previous.call_id)
+        if call.profile_id != body.profile_id:
+            return error_response(409, "request_conflict", "请求编号已用于另一份档案")
+        return {"id": call.id, "status": call.status}
     profile = store.get_profile(db, owner, body.profile_id)
     if profile is None:
         return error_response(404, "not_found", "找不到这位老人的档案")
@@ -134,7 +151,13 @@ def open_call(body: CallIn, request: Request, db: Session = Depends(db_session),
     settings: Settings = request.app.state.settings
     if not settings.voice_ready:
         return error_response(409, "voice_not_configured", "还没有配置豆包语音钥匙，通话暂时不能开始")
-    call = store.create_call(db, owner, profile.id)
+    if body.photo_id:
+        photo = db.get(Photo, body.photo_id)
+        if photo is None or photo.owner_id != owner or photo.profile_id != profile.id:
+            return error_response(404, "not_found", "找不到这张照片")
+    call = store.create_call(db, owner, profile.id, commit=False)
+    db.add(CallContext(id=key, owner_id=owner, call_id=call.id, photo_id=body.photo_id, topic=body.topic))
+    db.commit()
     return {"id": call.id, "status": call.status}
 
 
@@ -153,16 +176,19 @@ def call_detail(call_id: str, db: Session = Depends(db_session), owner: str | No
 def call_audio(call_id: str, kind: str, request: Request, db: Session = Depends(db_session), owner: str | None = Depends(current_owner)):
     if owner is None:
         return error_response(401, "unauthorized", "请先登录")
-    if kind not in {"user", "assistant"}:
-        return error_response(400, "audio_kind", "只能播放老人原声或 AI 回话")
+    if kind not in {"user", "assistant", "conversation", "playback"}:
+        return error_response(400, "audio_kind", "不支持这种录音类型")
     call = store.get_call(db, owner, call_id)
     if call is None:
         return error_response(404, "not_found", "找不到这通通话")
+    if kind == "playback":
+        kinds = set(db.scalars(select(AudioAsset.kind).where(AudioAsset.call_id == call_id, AudioAsset.owner_id == owner)))
+        kind = "conversation" if "conversation" in kinds else "user"
     pcm = store.read_audio(db, request.app.state.fernet, request.app.state.settings.data_path, owner, call_id, kind)
     if pcm is None:
         return error_response(404, "not_found", "这通通话还没有这段录音")
-    rate = 16000 if kind == "user" else 24000
-    return Response(content=store.pcm16_to_wav(pcm, rate), media_type="audio/wav")
+    rate = 24000 if kind == "assistant" else 16000
+    return Response(content=store.pcm16_to_wav(pcm, rate), media_type="audio/wav", headers={"Cache-Control": "private, no-store", "X-Recording-Kind": kind})
 
 
 @router.post("/calls/{call_id}/draft")
@@ -174,6 +200,8 @@ async def draft_call(call_id: str, request: Request, db: Session = Depends(db_se
         return error_response(404, "not_found", "找不到这通通话")
     if call.status not in {"ready", "failed"}:
         return error_response(409, "call_not_ready", "这通通话还没结束，不能整理成章")
+    if not request.app.state.settings.writing_ready:
+        return error_response(409, "model_not_configured", "写作服务尚未准备好")
     try:
         await asyncio.to_thread(
             ensure_full_transcript,
@@ -185,7 +213,7 @@ async def draft_call(call_id: str, request: Request, db: Session = Depends(db_se
             call.id,
         )
         chapter = await build_draft(db, request.app.state.settings, owner, call.id, call.profile_id)
-    except (DraftError, TingwuError) as exc:
+    except (DraftError, TingwuError, WritingError) as exc:
         return error_response(409, exc.code, exc.message)
     views = chapter_views(db, owner, call.id)
     return {"id": chapter.id, "chapters": views}

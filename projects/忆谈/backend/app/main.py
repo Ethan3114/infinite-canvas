@@ -7,11 +7,15 @@ from fastapi.responses import JSONResponse
 
 from app.api.http import router as http_router
 from app.api.live import router as live_router
+from app.api.mobile import router as mobile_router
+from app.api.family import router as family_router
+from app.api.editions import router as editions_router
 from app.core.config import Settings, get_settings
 from app.core.crypto import build_fernet
 from app.core.errors import error_body
 from app.db import ensure_dirs, make_engine, make_session_factory
 from app.models import Base
+from app.services.tasks import recover_interrupted
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -24,6 +28,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="忆谈")
     app.state.settings = settings
     app.state.db_factory = make_session_factory(engine)
+    app.state.draft_workers = set()
+    recover_interrupted(app.state.db_factory)
     app.state.fernet = build_fernet(settings.audio_fernet_key)
     app.add_middleware(
         CORSMiddleware,
@@ -34,6 +40,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(http_router)
     app.include_router(live_router)
+    app.include_router(mobile_router)
+    app.include_router(family_router)
+    app.include_router(editions_router)
 
     @app.exception_handler(RequestValidationError)
     async def invalid(_request: Request, _exc: RequestValidationError):

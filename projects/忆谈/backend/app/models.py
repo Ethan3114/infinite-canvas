@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -75,6 +75,13 @@ class AudioAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CallTimeline(Base):
+    __tablename__ = "call_timelines"
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    payload: Mapped[str] = mapped_column(Text)
+
+
 class Transcript(Base):
     __tablename__ = "transcripts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -136,3 +143,111 @@ class FactItem(Base):
     detail: Mapped[str] = mapped_column(Text, default="")
     source_quote: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="open")
+
+
+class BookSettings(Base):
+    __tablename__ = "book_settings"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), primary_key=True)
+    title: Mapped[str] = mapped_column(String(60))
+
+
+class CallContext(Base):
+    __tablename__ = "call_contexts"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), unique=True)
+    photo_id: Mapped[str | None] = mapped_column(ForeignKey("photos.id"), nullable=True)
+    topic: Mapped[str] = mapped_column(String(500), default="")
+
+
+class DraftTask(Base):
+    __tablename__ = "draft_tasks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(100), unique=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    step: Mapped[str] = mapped_column(String(20), default="queued")
+    error_code: Mapped[str] = mapped_column(String(60), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ParagraphEvidence(Base):
+    __tablename__ = "paragraph_evidence"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    paragraph_id: Mapped[str] = mapped_column(ForeignKey("paragraphs.id"), index=True)
+    source_line: Mapped[int] = mapped_column(Integer)
+    quote: Mapped[str] = mapped_column(Text)
+
+
+class WritingRun(Base):
+    __tablename__ = "writing_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    trace_path: Mapped[str] = mapped_column(String(240))
+    error_code: Mapped[str] = mapped_column(String(60), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FamilyPublication(Base):
+    __tablename__ = "family_publications"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(160), unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FamilyInvite(Base):
+    __tablename__ = "family_invites"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(160), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    allow_audio: Mapped[bool] = mapped_column(Boolean, default=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    member_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    redeem_request: Mapped[str] = mapped_column(String(80), default="")
+
+
+class FamilyMember(Base):
+    __tablename__ = "family_members"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id"), index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    session_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    allow_audio: Mapped[bool] = mapped_column(Boolean, default=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class FamilyComment(Base):
+    __tablename__ = "family_comments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("family_publications.id"), index=True)
+    member_id: Mapped[str] = mapped_column(ForeignKey("family_members.id"), index=True)
+    chapter_id: Mapped[str] = mapped_column(String(36))
+    request_id: Mapped[str] = mapped_column(String(160), unique=True)
+    payload: Mapped[str] = mapped_column(Text)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TextEdition(Base):
+    __tablename__ = "text_editions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("owners.id"), index=True)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(160), unique=True)
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

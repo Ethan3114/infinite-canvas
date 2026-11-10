@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    deepseek_writing_model: str = "deepseek-v4-pro"
+    writing_provider: str = "qwen"
+    dashscope_api_key: str = ""
+    dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_writing_model: str = "qwen3.7-plus"
     alibaba_cloud_access_key_id: str = ""
     alibaba_cloud_access_key_secret: str = ""
     tingwu_app_key: str = ""
@@ -49,7 +54,21 @@ class Settings(BaseSettings):
 
     @property
     def writing_ready(self) -> bool:
-        return bool(self.deepseek_api_key.strip())
+        return bool(self.writing_key.strip())
+
+    @property
+    def writing_model(self) -> str:
+        return self.qwen_writing_model if self.writing_provider == "qwen" else self.deepseek_writing_model
+
+    @property
+    def writing_key(self) -> str:
+        if self.writing_provider not in {"qwen", "deepseek"}:
+            raise ValueError("Unsupported writing provider")
+        return self.dashscope_api_key if self.writing_provider == "qwen" else self.deepseek_api_key
+
+    @property
+    def writing_url(self) -> str:
+        return self.dashscope_base_url if self.writing_provider == "qwen" else self.deepseek_base_url
 
     @property
     def tingwu_ready(self) -> bool:

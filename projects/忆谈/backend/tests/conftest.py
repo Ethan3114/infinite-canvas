@@ -18,6 +18,7 @@ def client(tmp_path: Path):
         audio_fernet_key=key,
         doubao_api_key="",
         deepseek_api_key="",
+        dashscope_api_key="",
         alibaba_cloud_access_key_id="",
         alibaba_cloud_access_key_secret="",
         tingwu_app_key="",

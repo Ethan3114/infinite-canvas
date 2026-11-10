@@ -1,224 +1,52 @@
 "use client";
-
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { API_BASE, ApiError, api, apiForm } from "@/lib/api";
-import { CallPanel } from "@/components/call-panel";
+import { FormEvent, use, useEffect, useState } from "react";
+import { BookOpen, ChevronRight, Images, Mic, PencilLine } from "lucide-react";
+import { Shell, Status, Empty } from "@/components/shell";
+import { BookCover } from "@/components/book-cover";
+import { PhotoAlbum } from "@/components/photo-album";
+import { DraftCard } from "@/components/draft-card";
+import { CallRecording } from "@/components/call-recording";
+import { profileSchema, dateLabel } from "@/lib/models";
+import { useResource } from "@/lib/use-resource";
+import { api, messageFor } from "@/lib/api";
 
-type Paragraph = { id: string; text: string; source_quote: string };
-type Chapter = {
-  id: string;
-  title: string;
-  paragraphs: Paragraph[];
-  facts: { id: string; topic: string; detail: string; status: string }[];
-  memories: { kind: string; name: string; detail: string }[];
-};
-type CallItem = {
-  id: string;
-  status: string;
-  failure_code: string;
-  texts: Record<string, string>;
-  chapter: Chapter | null;
-  chapters?: Chapter[];
-};
-type Profile = {
-  id: string;
-  elder_name: string;
-  hometown: string;
-  calls: CallItem[];
-};
-
-function elderWords(call: CallItem) {
-  return (call.texts.full || call.texts.side || call.texts.realtime_user || "").trim();
-}
-
-function isFinished(call: CallItem) {
-  return call.status === "ready" || call.status === "failed";
-}
-
-function callHasWords(call: CallItem) {
-  return Boolean(elderWords(call) || (call.texts.realtime_assistant || "").trim());
-}
-
-function writtenChapters(call: CallItem) {
-  const listed = (call.chapters ?? []).filter((chapter) => chapter.paragraphs.length > 0);
-  if (listed.length > 0) return listed;
-  if (call.chapter && call.chapter.paragraphs.length > 0) return [call.chapter];
-  return [];
-}
-
-export default function ProfilePage({ params }: { params: { id: string } }) {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [voiceReady, setVoiceReady] = useState(false);
+export default function ProfilePage({ params: paramsPromise, searchParams: searchPromise }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
+  const params = use(paramsPromise);
+  const searchParams = use(searchPromise);
+  const { data: profile, error, unauthorized, reload } = useResource(`/api/v1/profiles/${params.id}`, profileSchema);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [openQuote, setOpenQuote] = useState("");
-  const [writingReady, setWritingReady] = useState(false);
-  const [writingCall, setWritingCall] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      api<{ voice_ready: boolean; writing_ready: boolean }>("/api/v1/me"),
-      api<Profile>(`/api/v1/profiles/${params.id}`),
-    ])
-      .then(([me, detail]) => {
-        if (cancelled) return;
-        setVoiceReady(me.voice_ready);
-        setWritingReady(me.writing_ready);
-        setProfile(detail);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setMessage(error instanceof ApiError ? error.message : "没有打开档案");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [params.id]);
-
-  async function onPhoto(file: File | undefined) {
-    if (!file || !profile) return;
-    const body = new FormData();
-    body.append("file", file);
-    try {
-      await apiForm(`/api/v1/profiles/${profile.id}/photos`, body);
-      setMessage("照片已留下");
-    } catch (error) {
-      setMessage(error instanceof ApiError ? error.message : "照片没有保存");
-    }
+  const album = searchParams.tab === "photos";
+  useEffect(() => { if (profile) localStorage.setItem("yitan.currentProfile", profile.id); }, [profile]);
+  const base = `/profiles/${params.id}`;
+  async function saveTitle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSaving(true);
+    const title = new FormData(event.currentTarget).get("title");
+    try { await api(`/api/v1/profiles/${params.id}/book`, { method: "PUT", body: JSON.stringify({ title }) }); setEditing(false); reload(); }
+    catch (cause) { setMessage(messageFor(cause)); }
+    finally { setSaving(false); }
   }
-
-  async function setFact(factId: string, status: string) {
-    try {
-      await api(`/api/v1/facts/${factId}`, { method: "POST", body: JSON.stringify({ status }) });
-      window.location.reload();
-    } catch (error) {
-      setMessage(error instanceof ApiError ? error.message : "这条核对没有记下");
-    }
-  }
-
-  async function makeChapter(callId: string) {
-    setMessage("");
-    setWritingCall(callId);
-    try {
-      await api(`/api/v1/calls/${callId}/draft`, { method: "POST" });
-      window.location.reload();
-    } catch (error) {
-      setWritingCall("");
-      setMessage(error instanceof ApiError ? error.message : "没有整理出来");
-    }
-  }
-
-  if (!profile) {
-    return <main className="mx-auto max-w-2xl px-6 py-10">{message || "正在打开"}</main>;
-  }
-
-  const written = profile.calls.filter((call) => writtenChapters(call).length > 0);
-  const waiting = profile.calls.filter((call) => isFinished(call) && writtenChapters(call).length === 0);
-  const unfinished = profile.calls.some((call) => !isFinished(call) && writtenChapters(call).length === 0);
-
-  return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link className="text-sm text-clay" href="/profiles">返回档案</Link>
-      <h1 className="mt-6 text-4xl">{profile.elder_name}</h1>
-      <p className="mt-2 text-lg text-ink/70">{profile.hometown || "还没有写籍贯"}</p>
-
-      <section className="mt-8">
-        <h2 className="text-sm tracking-[0.2em] text-clay">这一次</h2>
-        {written.length > 0 ? <p className="mt-3 text-sm text-ink/60">开场会提起最近写成的那一章。</p> : null}
-        <div className="mt-3">
-          <CallPanel profileId={profile.id} voiceReady={voiceReady} onFinished={() => { window.location.reload(); }} />
-        </div>
-        {message ? <p className="mt-4 text-clay">{message}</p> : null}
+  const chapters = profile?.calls.slice().reverse().flatMap(call => call.chapters.map(chapter => ({ ...chapter, date: call.created_at }))) ?? [];
+  return <Shell title="我的回忆录" subtitle="说过的话，都有了归处" profileId={params.id}>
+    <Status error={error} unauthorized={unauthorized} retry={reload} loading={!profile && !error} />
+    {profile ? <>
+      <div className="book-stage"><BookCover title={profile.book_title} name={profile.elder_name} /></div>
+      <div className="book-caption"><span>{chapters.length} 篇回忆</span><span>{profile.calls.length} 次访谈</span></div>
+      <div style={{ textAlign: "center" }}><button type="button" className="text-link small-text" onClick={() => setEditing(!editing)}><PencilLine size={14} style={{ display: "inline", marginRight: 6 }} />修改书名</button></div>
+      {editing ? <form className="card form" onSubmit={saveTitle}><label className="field">书名<input name="title" defaultValue={profile.book_title} required maxLength={60} /></label><button className="primary" disabled={saving}>保存书名</button></form> : null}
+      <Status error={message} />
+      <section className="talk-card"><span className="eyebrow">今天，慢慢聊</span><h2>{profile.calls.length ? "还有哪些往事，想接着讲？" : "小时候的家，是什么样子？"}</h2><Link className="primary" href={`${base}/call`}><Mic size={24} />{profile.calls.length ? "继续聊聊" : "开始第一次访谈"}</Link><Link href={`${base}?tab=photos`} className="photo-prompt"><Images size={20} />从照片聊起<ChevronRight size={18} /></Link></section>
+      <section className="section" id="contents"><div className="segmented" aria-label="回忆录内容"><Link href={base} aria-current={!album ? "page" : undefined}>目录</Link><Link href={`${base}?tab=photos`} aria-current={album ? "page" : undefined}>照片</Link></div>
+        {album ? <PhotoAlbum profileId={params.id} /> : <>
+          <div className="section-heading"><h2>写下来的时光</h2><span className="small-text muted">共 {chapters.length} 篇</span></div>
+          {chapters.length ? chapters.map((chapter, index) => <Link className="chapter-row" key={chapter.id} href={`${base}/chapters/${chapter.id}`}><span className="chapter-number">{String(index + 1).padStart(2, "0")}</span><div className="chapter-copy"><h3>{chapter.title}</h3><p>{chapter.paragraphs[0]?.text}</p><small>{dateLabel(chapter.date)} 记下</small></div><ChevronRight size={18} style={{ flexShrink: 0, marginTop: 8 }} /></Link>) : <Empty icon={<BookOpen size={40} />} title="第一章，等您来讲"><p>每一段亲口讲述的经历，<br />都会在这里慢慢成书。</p></Empty>}
+          {profile.calls.filter(call => call.status !== "live" && (!call.chapters.length || call.task?.status === "running" || call.task?.status === "queued")).map(call => <DraftCard key={call.id} call={call} onComplete={reload} />)}
+        </>}
       </section>
-
-      {written.length > 0 ? (
-        <section className="mt-12">
-          <h2 className="text-sm tracking-[0.2em] text-clay">已经写成的</h2>
-          <div className="mt-4 space-y-8">
-            {written.map((call) => (
-              <article key={call.id}>
-                {writtenChapters(call).map((chapter) => (
-                  <div key={chapter.id} className="mt-8 first:mt-0">
-                    <h3 className="text-3xl leading-snug">{chapter.title}</h3>
-                    <div className="mt-5 space-y-5 text-lg leading-8">
-                      {chapter.paragraphs.map((paragraph) => (
-                        <div key={paragraph.id}>
-                          <p>{paragraph.text}</p>
-                          <button className="mt-1 text-sm text-clay" type="button" onClick={() => setOpenQuote(openQuote === paragraph.id ? "" : paragraph.id)}>
-                            {openQuote === paragraph.id ? "收起" : "这句原话"}
-                          </button>
-                          {openQuote === paragraph.id ? <p className="mt-1 text-base leading-7 text-ink/60">{paragraph.source_quote}</p> : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                {writtenChapters(call).some((chapter) => chapter.facts.some((fact) => fact.detail)) ? (
-                  <details className="mt-6 text-sm leading-6 text-ink/60">
-                    <summary className="cursor-pointer">先不写进正文的</summary>
-                    <ul className="mt-3 space-y-3">
-                      {writtenChapters(call).flatMap((chapter) => chapter.facts).filter((fact) => fact.detail).map((fact) => (
-                        <li key={fact.id}>
-                          <p>{fact.detail}</p>
-                          {fact.status === "confirmed" ? <p>已确认</p> : null}
-                          {fact.status === "rejected" ? <p>已拿掉</p> : null}
-                          {fact.status === "open" ? (
-                            <p className="mt-1">
-                              <button type="button" onClick={() => setFact(fact.id, "confirmed")}>确认</button>
-                              <button className="ml-4" type="button" onClick={() => setFact(fact.id, "rejected")}>这句不要</button>
-                            </p>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
-                <details className="mt-4 text-sm leading-6 text-ink/60">
-                  <summary className="cursor-pointer">录音和原话</summary>
-                  <audio className="mt-3 w-full" controls crossOrigin="use-credentials" src={`${API_BASE}/api/v1/calls/${call.id}/audio/user`} />
-                  {elderWords(call) ? <p className="mt-3 whitespace-pre-wrap">{elderWords(call)}</p> : null}
-                  {writingReady ? (
-                    <button className="mt-3 text-clay" type="button" disabled={writingCall === call.id} onClick={() => makeChapter(call.id)}>
-                      {writingCall === call.id ? "正在写" : "按原话再写一遍"}
-                    </button>
-                  ) : null}
-                </details>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {waiting.length > 0 ? (
-        <section className="mt-12">
-          <h2 className="text-sm tracking-[0.2em] text-clay">还没写成</h2>
-          <div className="mt-4 space-y-4">
-            {waiting.map((call) => (
-              <article key={call.id} className="rounded-3xl bg-white px-6 py-6">
-                <p className="text-lg">{callHasWords(call) ? "这通已经说完。" : "这通中断了，声音留下了，字没有转出来。"}</p>
-                <audio className="mt-3 w-full" controls crossOrigin="use-credentials" src={`${API_BASE}/api/v1/calls/${call.id}/audio/user`} />
-                {callHasWords(call) ? (
-                  <button
-                    className="mt-4 rounded-full bg-ink px-5 py-3 text-paper disabled:opacity-50"
-                    type="button"
-                    disabled={writingCall === call.id}
-                    onClick={() => makeChapter(call.id)}
-                  >
-                    {writingCall === call.id ? "正在写成一段回忆" : writingReady ? "写成一段回忆" : "写成一段回忆（还缺写作用的钥匙）"}
-                  </button>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {unfinished ? <p className="mt-8 text-sm text-ink/50">还有一通没说完。</p> : null}
-
-      <details className="mt-12 text-sm text-ink/60">
-        <summary className="cursor-pointer">放一张老照片</summary>
-        <input className="mt-3 block w-full" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => onPhoto(event.target.files?.[0])} />
-      </details>
-    </main>
-  );
+      <details className="section" id="history"><summary>访谈记录 · {profile.calls.length} 次</summary>{profile.calls.length ? profile.calls.map(call => <div key={call.id} className="task-card"><h3>{dateLabel(call.created_at)}的访谈</h3><p>{call.status === "live" ? "访谈尚未结束" : call.status === "failed" ? "访谈中断，已保存内容可查看" : "访谈已结束"}</p><CallRecording callId={call.id} kinds={call.audio_kinds} />{call.texts.full || call.texts.side ? <details><summary>查看原话</summary><p style={{ whiteSpace: "pre-wrap" }}>{call.texts.full || call.texts.side}</p></details> : null}{call.chapters.length ? <DraftCard call={call} onComplete={reload} /> : null}</div>) : <p className="muted">还没有开始访谈。</p>}</details>
+      <Link className="text-link small-text" href="/profiles">切换回忆录</Link>
+    </> : null}
+  </Shell>;
 }

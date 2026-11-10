@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.services.redact import redact_sensitive
 from app.services.store import read_audio, replace_transcript, transcripts_for
+from app.models import CallTimeline
 
 DOMAIN = "tingwu.cn-beijing.aliyuncs.com"
 
@@ -140,19 +141,23 @@ def ensure_full_transcript(
     owner_id: str,
     call_id: str,
 ) -> None:
-    """已有全量稿就复用。没有时，用留下的麦克风录音做一次听悟。"""
-    if not settings.tingwu_ready:
-        return
+    """新通话转写双方合成录音，历史通话保留已有原声与逐字稿。"""
     existing = {row.track: row.text for row in transcripts_for(db, owner_id, call_id)}
     if (existing.get("full") or "").strip():
         return
-    pcm = read_audio(db, fernet, data_dir, owner_id, call_id, "user")
+    if not settings.tingwu_ready:
+        raise TingwuError("tingwu_not_configured", "全量转写服务尚未配置，请联系管理家属")
+    conversation = read_audio(db, fernet, data_dir, owner_id, call_id, "conversation")
+    if conversation is None and db.get(CallTimeline, call_id) is not None:
+        raise TingwuError("conversation_missing", "这次访谈的合成录音缺失，请先核对录音文件")
+    pcm = conversation if conversation is not None else read_audio(db, fernet, data_dir, owner_id, call_id, "user")
     if not pcm:
-        return
+        raise TingwuError("audio_missing", "没有找到本次访谈录音，无法完成全量转写")
     from app.services.store import pcm16_to_wav
 
     text = redact_sensitive(transcribe_wav(settings, pcm16_to_wav(pcm, 16000), f"yitan/{call_id}.wav"))
     assistant = (existing.get("realtime_assistant") or "").strip()
-    if assistant:
+    if assistant and conversation is None:
         text = text + "\n\n[访谈者，这一路没有逐句时间]\n" + assistant
     replace_transcript(db, owner_id, call_id, "full", text)
+    replace_transcript(db, owner_id, call_id, "transcription_source", "conversation" if conversation is not None else "legacy_microphone")
