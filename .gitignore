@@ -5,11 +5,11 @@
 __pycache__/
 .pytest_cache/
 node_modules/
-.next/
-.next-dev/
-*.tsbuildinfo
 dist/
 data/
-.vefaas/
-.DS_Store
 .intermediate/
+docs/evidence/
+*.tsbuildinfo
+*.db
+*.sqlite
+.DS_Store
